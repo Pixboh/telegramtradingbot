@@ -9,12 +9,9 @@ import (
 	"strings"
 )
 
-// chat gpt key : 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
-
 func (tgBot *TgBot) GptParseNewMessage(message string, apiKey string, symbols []string) (*TradeRequest, error) {
 	// Créer des exemples d'instructions avec actionType et zone d'entrée inclus
 	// Créer une requête ChatCompletion pour le message à analyser
-	//clientOpenApi := openai.NewClient("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")
 	clientOpenApi := openai.NewClient(apiKey)
 	f := fmt.Sprintf("Voici les symboles disponibles: %v", symbols)
 	if f == "" {
