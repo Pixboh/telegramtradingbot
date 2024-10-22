@@ -45,6 +45,7 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("set_symbols", tgBot.setSymbolsCallback))
 	dispatcher.AddHandler(handlers.NewCommand("set_strategy", tgBot.setStrategyCallback))
 	dispatcher.AddHandler(handlers.NewCommand("status", tgBot.GetBotStatus))
+	dispatcher.AddHandler(handlers.NewCommand("set_risk", tgBot.setRiskPercentageCallback))
 
 	dispatcher.AddHandler(handlers.NewCallback(nil, tgBot.handleCallback))
 
@@ -69,6 +70,56 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 
 func (tgBot *TgBot) setStrategyCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 	return tgBot.setStrategy(b, ctx, false)
+}
+func (tgBot *TgBot) setRiskPercentageCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setRiskPercentage(b, ctx, false)
+}
+
+func (tgBot *TgBot) setRiskPercentage(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// Définir une liste de pourcentages de risque disponibles
+	percentages := []float64{0.5, 1, 1.5, 2, 3, 5}
+
+	// Générer un clavier inline basé sur les pourcentages
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	for _, percentage := range percentages {
+		currentRiskPercentage := tgBot.RedisClient.GetRiskPercentage() // Obtenir le pourcentage actuel depuis Redis
+		text := fmt.Sprintf("%.2f%%", percentage)
+		if currentRiskPercentage == percentage {
+			text = text + " ✅" // Ajouter une coche si le pourcentage est actuellement sélectionné
+		}
+		inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("risk_%f", percentage),
+			},
+		})
+	}
+
+	// Créer le clavier Inline
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+
+	// Vérifier si l'on édite ou envoie un nouveau message
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, "Choisissez le pourcentage de risque pour vos trades :", &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send risk percentage message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, "Choisissez le pourcentage de risque pour vos trades :", &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to edit risk percentage message: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
@@ -97,6 +148,9 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	ctx.EffectiveMessage.Reply(b, text, nil)
 	// channels
 	tgBot.paginateChannels(b, ctx, -1)
+	// set chat id
+	chatId := ctx.EffectiveChat.Id
+	tgBot.RedisClient.SetChatId(chatId)
 	return nil
 }
 
@@ -500,6 +554,28 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 
 		return tgBot.paginateChannels(b, ctx, 0)
 	}
+	if strings.HasPrefix(data, "risk_") {
+		// Extraire le pourcentage de risque
+		riskStr := strings.TrimPrefix(data, "risk_")
+		risk, err := strconv.ParseFloat(riskStr, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse risk percentage: %w", err)
+		}
+
+		// Stocker le pourcentage de risque dans Redis
+		tgBot.RedisClient.SetRiskPercentage(risk)
+
+		// Répondre à l'utilisateur
+		_, err = ctx.CallbackQuery.Answer(b, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Pourcentage de risque mis à jour avec succès !",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to answer callback query: %w", err)
+		}
+
+		// Mettre à jour l'affichage
+		return tgBot.setRiskPercentage(b, ctx, true)
+	}
 	// strattegy
 	if strings.HasPrefix(data, "strategy_") {
 		strategy := strings.TrimPrefix(data, "strategy_")
@@ -625,4 +701,20 @@ func (tgBot *TgBot) paginateChannels(b *gotgbot.Bot, ctx *ext.Context, offset in
 		return fmt.Errorf("failed to run telegram client: %w", err)
 	}
 	return nil
+}
+
+// function to send a new parsed message from the bot to the current chat
+func (tgBot *TgBot) sendMessage(message string, replyToMessageID int) (*gotgbot.Message, error) {
+	//tgBot.Bot
+	chatID := tgBot.RedisClient.GetChatId()
+	if replyToMessageID != 0 {
+		return tgBot.Bot.SendMessage(chatID, message, &gotgbot.SendMessageOpts{
+			ReplyParameters: &gotgbot.ReplyParameters{
+				MessageId: int64(replyToMessageID),
+			},
+		})
+	} else {
+		return tgBot.Bot.SendMessage(chatID, message, nil)
+	}
+
 }

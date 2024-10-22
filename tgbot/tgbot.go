@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
-	"strings"
 	"tdlib/authmanager"
 	"tdlib/config"
 	"tdlib/redis_client"
@@ -109,6 +108,7 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 		log.Info("Channel message", zap.Any("message", u.Message))
 		m, ok := u.Message.(*tg.Message)
 		if ok && m.Out {
+			log.Info("Message is not incoming from channel")
 			return nil
 		}
 		if !messageIsTradingSignal(m) {
@@ -116,7 +116,9 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 			return nil
 		}
 		// get channel by loop e.Channels map[int64]*tg.Channel
+		messageChannel := tg.Channel{}
 		for _, channel := range e.Channels {
+			messageChannel = *channel
 			if !tgBot.RedisClient.IsChannelExist(channel.ID) {
 				log.Info("Channel not included", zap.Int64("channel_id", channel.ID))
 				return nil
@@ -158,20 +160,13 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 			log.Info("Bot is off")
 			return nil
 		}
-		tradeRequest, _, err := tgBot.HandleTradeRequest(ctx, m,
-			openaiApiKey, metaApiAccountId, metaApiToken, defaultVolume, replyTradeRequest)
+		_, _, err := tgBot.HandleTradeRequest(ctx, m,
+			openaiApiKey, metaApiAccountId, metaApiToken, defaultVolume, replyTradeRequest, messageChannel)
 		if err != nil {
 			log.Error("Error handling trade request", zap.Error(err))
 			return err
 		}
-		if !isReplyTo {
-			// save trade request
-			tradeRequest.MessageId = &m.ID
-			tradeRbytes, errJ := json.Marshal(tradeRequest)
-			if errJ == nil {
-				tgBot.RedisClient.SetTradeRequest(int64(m.ID), tradeRbytes)
-			}
-		}
+
 		return nil
 	})
 
@@ -192,19 +187,6 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 			},
 		})
 	})
-}
-
-func messageIsTradingSignal(m *tg.Message) bool {
-	// check if message contains certains terms
-	termsToSearch := []string{"buy", "sell", "entry", "exit", "long", "short", "close", "stop", "loss", "take", "profit", "tp", "sl",
-		"stoploss", "vente", "achete", "achat", "touche", "zone", "entry", "vend", "ferm", "securise"}
-	for _, term := range termsToSearch {
-		// use same case search
-		if m.Message != "" && strings.Contains(strings.ToLower(m.Message), term) {
-			return true
-		}
-	}
-	return false
 }
 
 func prettyMiddleware() telegram.MiddlewareFunc {

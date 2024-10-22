@@ -10,7 +10,14 @@ services:
       - redis-server
     environment:
       PORT: 8080
-
+      APP_ID: 26058828
+      APP_HASH: bb0fa6a0b77815b37f642936a8e00ce3
+      BOT_TOKEN: 8138746202:AAGoUErnWQHgPem_avFGfheP48B8ltkF9Ns
+      META_API_ACCOUNT_ID: 174013a4-0a6e-4f10-bda7-feee1a846b4a
+      META_API_ENDPOINT: https://mt-client-api-v1.london.agiliumtrade.ai
+      META_API_TOKEN: eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiJhOWI3Y2M0ZDkzYzA2NDNmYjc1NDYyNjI1YmI3YjBmMiIsInBlcm1pc3Npb25zIjpbXSwiYWNjZXNzUnVsZXMiOlt7ImlkIjoidHJhZGluZy1hY2NvdW50LW1hbmFnZW1lbnQtYXBpIiwibWV0aG9kcyI6WyJ0cmFkaW5nLWFjY291bnQtbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoibWV0YWFwaS1yZXN0LWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoibWV0YWFwaS1ycGMtYXBpIiwibWV0aG9kcyI6WyJtZXRhYXBpLWFwaTp3
+      OPENAI_TOKEN: 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
+      PHONE_NUMBER: +33658532534
   redis:
     image: redis:latest
     restart: always

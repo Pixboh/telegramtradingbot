@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // Function to place a trade and retrieve the response
@@ -102,7 +104,7 @@ func fetchCurrentPrice(symbol, metaApiAccountId, metaApiToken string) (*MetaApiP
 }
 
 func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message, openaiApiKey, metaApiAccountId,
-	metaApiToken string, volume float64, parentRequest *TradeRequest) (*TradeRequest, *[]TradeResponse, error) {
+	metaApiToken string, volume float64, parentRequest *TradeRequest, channel tg.Channel) (*TradeRequest, *[]TradeResponse, error) {
 	// Parse the incoming message into a TradeRequest
 	symbols, err := fetchAllSymbols(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 	if err != nil {
@@ -123,6 +125,12 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 			return nil, nil, errors.New("symbol is not allowed")
 		}
 		errTrade := validateTradeValue(tradeRequest)
+		// check if the same trade already exist
+		if tgBot.RedisClient.IsTradeKeyExist(tradeRequest.GenerateTradeRequestKey()) {
+			log.Printf("Trade already placed")
+			//niapeu xonam xawgama ray
+			return nil, nil, errors.New("trade already exist")
+		}
 
 		// log fixed trade object
 		log.Printf("TradeRequest struct: %+v\n", tradeRequest)
@@ -160,6 +168,7 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		// trade response list
 		var tradeResponses []TradeResponse
 		strategy := tgBot.RedisClient.GetStrategy()
+		tradeSuccess := false
 		for i, metaApiRequest := range metaApiRequests {
 			if strategy == "TP1" {
 				if i > 0 {
@@ -174,8 +183,19 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 					break
 				}
 			}
+			takeProfit := 0.0
+			if i == 0 {
+				takeProfit = tradeRequest.TakeProfit1
+			} else if i == 1 {
+				takeProfit = tradeRequest.TakeProfit2
+			} else if i == 2 {
+				takeProfit = tradeRequest.TakeProfit3
+			}
+			tpNumber := i + 1
 			metaApiRequest.Volume = volume
-			clientId := fmt.Sprintf("%s_%s_pending", strconv.Itoa(message.ID), "TP"+strconv.Itoa(i+1))
+			// concat channel id and channel initial
+			chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
+			clientId := fmt.Sprintf("%s_%s_%s", chanelInitials, strconv.Itoa(message.ID), "TP"+strconv.Itoa(i+1))
 			// channelID_messageId_TP1
 			metaApiRequest.ClientID = &clientId
 			// try at least three time
@@ -183,21 +203,120 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 				trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
 				if err != nil {
 					log.Printf("Error placing trade: %v", err)
+					if j == 2 {
+						// generate error message with reason
+						/**
+						❌ Trade not placed
+						🏀 Channel : @channel
+						 Buy EURUSD
+						 Entry Price: 1.1234
+						 Stop Loss: 1.1200
+						 Take Profit: 1.1300
+						 ❌ Error: Invalid volume
+						*/
+						errorReason := fmt.Sprintf("Error request %v", err)
+						messageText := fmt.Sprintf("❌ Trade not placed\n"+
+							"🏀 Channel : %s\n %s %s\n  Stop Loss: %.2f\n TP%s: %.2f\n❌ Error: %s",
+							channel.Title, tradeRequest.ActionType, tradeRequest.Symbol,
+							tradeRequest.StopLoss, strconv.Itoa(tpNumber), takeProfit, errorReason)
+						_, err := tgBot.sendMessage(messageText, 0)
+						if err != nil {
+							log.Printf("Error sending message: %v", err)
+						}
+					}
 					continue
 				}
-				if trade != nil && trade.NumericCode == 0 && trade.OrderId != nil {
-					log.Printf("Trade placed successfully: %v", trade)
-					// save trade to redis
-					tradeResponses = append(tradeResponses, *trade)
-					// exit
-					break
+				errorTrade := HandleTradeError(trade.NumericCode)
+				if tradeErr, ok := errorTrade.(*TradeError); ok {
+					if tradeErr.Type == Success {
+						if !tradeSuccess {
+							tradeSuccess = true
+						}
+						log.Printf("Trade placed successfully: %v", trade)
+						// send fancy bot message with emoji to  inform usser the trade was placed with additional info about the provenance (message , channel )
+						// ad next line separation also add also values info stopLoss takeprofit etc
+						// example
+						/**
+						Trade placed
+						⛏ ID : 1234
+						🏀 Channel : @channel
+						📈 Buy EURUSD
+						🔴 Stop Loss: 1.1200
+						🟢 Take Profit: 1.1300
+						*/
+						messageText := fmt.Sprintf("Trade placed\n⛏ ID : %s\n🏀 Channel : %s\n📈 %s %s\n🔴 SL: %.2f\n🟢 TP%s: %.2f",
+							clientId, channel.Title, tradeRequest.ActionType, tradeRequest.Symbol, tradeRequest.StopLoss, strconv.Itoa(tpNumber), takeProfit)
+						m, err := tgBot.sendMessage(messageText, 0)
+						if err != nil {
+							log.Printf("Error sending message: %v", err)
+						}
+						tgBot.RedisClient.SetPositionMessageId(*trade.PositionId, m.MessageId)
+						break
+					} else {
+						// if last retry send error message
+						if j == 2 {
+							// generate error message with reason
+							/**
+							❌ Trade not placed
+							🏀 Channel : @channel
+							 Buy EURUSD
+							 Entry Price: 1.1234
+							 Stop Loss: 1.1200
+							 Take Profit: 1.1300
+							 ❌ Error: Invalid volume
+							*/
+							messageText := fmt.Sprintf("❌ Trade not placed\n"+
+								"🏀 Channel : %s\n %s %s\n  Stop Loss: %.2f\n TP%s: %.2f\n❌ Error: %s",
+								channel.Title, tradeRequest.ActionType, tradeRequest.Symbol, tradeRequest.StopLoss,
+								strconv.Itoa(tpNumber), takeProfit, tradeErr.Description)
+							_, err := tgBot.sendMessage(messageText, 0)
+							if err != nil {
+								log.Printf("Error sending message: %v", err)
+								return nil, nil, err
+							}
+						}
+						continue
+					}
+				} else {
+					if j == 2 {
+						// generate error message with reason
+						/**
+						❌ Trade not placed
+						🏀 Channel : @channel
+						 Buy EURUSD
+						 Entry Price: 1.1234
+						 Stop Loss: 1.1200
+						 Take Profit: 1.1300
+						 ❌ Error: Invalid volume
+						*/
+						errorReason := fmt.Sprintf("Invalid code returned %v", trade)
+						messageText := fmt.Sprintf("❌ Trade not placed\n🏀"+
+							" Channel : %s\n %s %s\n  Stop Loss: %.2f\n TP%s: %.2f\n❌ Error: %s",
+							channel.Title, tradeRequest.ActionType, tradeRequest.Symbol, tradeRequest.StopLoss,
+							strconv.Itoa(tpNumber), takeProfit, errorReason)
+						_, err := tgBot.sendMessage(messageText, 0)
+						if err != nil {
+							log.Printf("Error sending message: %v", err)
+							return nil, nil, err
+						}
+					}
+
 				}
-				// sleep 500ms
-				time.Sleep(300 * time.Millisecond)
 			}
 		}
-
-		return tradeRequest, &tradeResponses, nil
+		if tradeSuccess {
+			// save trade request
+			tradeRequest.MessageId = &message.ID
+			tradeRbytes, errJ := json.Marshal(tradeRequest)
+			if errJ == nil {
+				tgBot.RedisClient.SetTradeRequest(int64(message.ID), tradeRbytes)
+				// add trade key
+				tgBot.RedisClient.AddTradeKey(tradeRequest.GenerateTradeRequestKey())
+				return tradeRequest, &tradeResponses, nil
+			}
+		} else {
+			return nil, nil, errors.New("trade not placed")
+		}
 	} else {
 		//here its an update of a given order so we need to fetch the order and update it
 		tradeUpdate, err := GptParseUpdateMessage(message.Message, openaiApiKey)
@@ -212,154 +331,448 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		currentMessagePositions := getPositionsByMessageId(positions, *parentRequest.MessageId)
 		var tradeResponses []TradeResponse
 		if tradeUpdate.UpdateType == "TP1_HIT" {
+			// do breakeven
 			//	if tp1 hit modify SL to tp 1 value on all other TP
-			for _, position := range currentMessagePositions {
-				metaApiRequest := MetaApiTradeRequest{
-					ActionType: "POSITION_MODIFY",
-					StopLoss:   parentRequest.TakeProfit1,
-					PositionID: position.ID,
-				}
-				for j := 0; j < 3; j++ {
-					trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
-					if err != nil {
-						log.Printf("Error placing trade: %v", err)
-						continue
-					}
-					if trade != nil && trade.NumericCode != 0 {
-						log.Printf("Trade placed successfully: %v", trade)
-						// save trade to redis
-						tradeResponses = append(tradeResponses, *trade)
-						// exit
-						break
-					}
-					// sleep 500ms
-					time.Sleep(300 * time.Millisecond)
-				}
+			errBreakEven := tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 1)
+			if errBreakEven != nil {
 
 			}
 
 		} else if tradeUpdate.UpdateType == "TP2_HIT" {
-			// pull all SL to takeprofit2
-			for _, position := range currentMessagePositions {
-				metaApiRequest := MetaApiTradeRequest{
-					ActionType: "POSITION_MODIFY",
-					StopLoss:   parentRequest.TakeProfit2,
-					PositionID: position.ID,
-				}
-				for j := 0; j < 3; j++ {
-					trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
-					if err != nil {
-						log.Printf("Error placing trade: %v", err)
-						continue
-					}
-					if trade != nil && trade.NumericCode == 0 {
-						log.Printf("Trade placed successfully: %v", trade)
-						// save trade to redis
-						tradeResponses = append(tradeResponses, *trade)
-						// exit
-						break
-					}
-					// sleep 500ms
-					time.Sleep(300 * time.Millisecond)
-				}
+			errBreakEven := tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 2)
+			if errBreakEven != nil {
+
 			}
 		} else if tradeUpdate.UpdateType == "TP3_HIT" {
 			// pull all SL to takeprofit3
-			for _, position := range currentMessagePositions {
-				metaApiRequest := MetaApiTradeRequest{
-					ActionType: "POSITION_MODIFY",
-					StopLoss:   parentRequest.TakeProfit3,
-					PositionID: position.ID,
-				}
-				for j := 0; j < 3; j++ {
-					trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
-					if err != nil {
-						log.Printf("Error placing trade: %v", err)
-						continue
-					}
-					if trade != nil && trade.NumericCode == 0 {
-						log.Printf("Trade placed successfully: %v", trade)
-						// save trade to redis
-						tradeResponses = append(tradeResponses, *trade)
-						// exit
-						break
-					}
-					// sleep 500ms
-					time.Sleep(300 * time.Millisecond)
-				}
+			errBreakEven := tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 3)
+			if errBreakEven != nil {
+
 			}
 		} else if tradeUpdate.UpdateType == "CLOSE_TRADE" {
 			// close all positions
-			for _, position := range currentMessagePositions {
-				metaApiRequest := MetaApiTradeRequest{
-					ActionType: "POSITION_CLOSE_ID",
-					PositionID: position.ID,
-				}
-				trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
-				if err != nil {
-					log.Printf("Error closing trade: %v", err)
-					return nil, nil, err
-				}
-				if trade != nil && trade.NumericCode == 0 {
-					log.Printf("Trade closed successfully")
-				}
-				tradeResponses = append(tradeResponses, *trade)
+			errClodeTrade := tgBot.doCloseTrade(parentRequest, currentMessagePositions, metaApiAccountId, metaApiToken)
+			if errClodeTrade != nil {
+
 			}
 		} else if tradeUpdate.UpdateType == "MODIFY_STOPLOSS" {
 			// modify stop loss to the value given
-			for _, position := range currentMessagePositions {
-				metaApiRequest := MetaApiTradeRequest{
-					ActionType: "POSITION_MODIFY",
-					StopLoss:   *tradeUpdate.Value,
-					PositionID: position.ID,
-				}
-				for j := 0; j < 3; j++ {
-					trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
-					if err != nil {
-						log.Printf("Error placing trade: %v", err)
-						continue
-					}
-					if trade != nil && trade.NumericCode == 0 {
-						log.Printf("Trade placed successfully: %v", trade)
-						// save trade to redis
-						tradeResponses = append(tradeResponses, *trade)
-						// exit
-						break
-					}
-					// sleep 500ms
-					time.Sleep(300 * time.Millisecond)
-				}
+			errModifyStopLoss := tgBot.doModifyStopLoss(parentRequest, tradeUpdate, currentMessagePositions, metaApiAccountId, metaApiToken)
+			if errModifyStopLoss != nil {
+
 			}
+
 		} else if tradeUpdate.UpdateType == "SL_TO_ENTRY_PRICE" {
 			// modify stop loss to the value given
-			for _, position := range currentMessagePositions {
-				metaApiRequest := MetaApiTradeRequest{
-					ActionType: "POSITION_MODIFY",
-					StopLoss:   position.OpenPrice,
-					PositionID: position.ID,
-				}
-				for j := 0; j < 3; j++ {
-					trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
-					if err != nil {
-						log.Printf("Error placing trade: %v", err)
-						continue
-					}
-					if trade != nil && trade.NumericCode == 0 {
-						log.Printf("Trade placed successfully: %v", trade)
-						// save trade to redis
-						tradeResponses = append(tradeResponses, *trade)
-						// exit
-						break
-					}
-					// sleep 500ms
-					time.Sleep(300 * time.Millisecond)
-				}
+			errSlToEntryPrice := tgBot.doSlToEntryPrice(parentRequest, currentMessagePositions, metaApiAccountId, metaApiToken)
+			if errSlToEntryPrice != nil {
+
 			}
+
 		}
 		//get list active positions
 
 		return nil, &tradeResponses, nil
 	}
+	return nil, nil, errors.New("trade not placed")
+}
+
+func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []*MetaApiPosition, id string, token string) error {
+	// get entry price base on positions
+	tradeSuccess := false
+	// generate a telegram response for the bot
+	botMessage := fmt.Sprintf("✅ SL to Entry Price 🎉")
+	for _, position := range positions {
+		//
+		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+		metaApiRequest := MetaApiTradeRequest{
+			ActionType: "POSITION_MODIFY",
+			StopLoss:   position.OpenPrice,
+			PositionID: position.ID,
+		}
+		// place all positions stop loss to their open price
+		for j := 0; j < 3; j++ {
+			trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, tgBot.AppConfig.MetaApiAccountID,
+				tgBot.AppConfig.MetaApiToken)
+			//
+			if err != nil {
+				log.Printf("Error placing trade: %v", err)
+				if j == 2 {
+					// send parsed error message from bot
+					// generate error message with reason
+					botErrorMessage := fmt.Sprintf("❌ Failed moving SL to entry price")
+					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+						fmt.Sprintf("❌ Error: %s", err))
+					tgBot.sendMessage(botMessage, int(positionMessageId))
+				}
+				continue
+			}
+			errorTrade := HandleTradeError(trade.NumericCode)
+			if tradeErr, ok := errorTrade.(*TradeError); ok {
+				if tradeErr.Type == Success {
+					if !tradeSuccess {
+						tradeSuccess = true
+					}
+					if tradeErr.Type == Success {
+						log.Printf("Trade update placed successfully: %v", trade)
+						// append message to inform user that we moved the stop loss to the entry price of this current tp
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Moving SL to entry price"))
+						// append with values on next  line
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Position ID: %s\nSL: %.2f -> %.2f", position.ID, position.StopLoss, position.OpenPrice))
+						// get message to reply to
+						// get chat message and reply to it
+						sendMessage, errM := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if sendMessage != nil {
+
+						}
+						if errM != nil {
+							return errM
+						}
+						break
+					} else {
+						time.Sleep(150 * time.Millisecond)
+						continue
+					}
+				} else {
+					// if last retry send error message
+					if j == 2 {
+						botErrorMessage := fmt.Sprintf("❌ Failed moving SL to entry price")
+						botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+							fmt.Sprintf("❌ Error: %s", tradeErr.Description))
+						tgBot.sendMessage(botMessage, int(positionMessageId))
+					}
+					time.Sleep(150 * time.Millisecond)
+					continue
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// function to do breakeven when tp are hit on a trade
+func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel, currentMessagePositions []*MetaApiPosition, messageId int, tpHitNumber int) error {
+	// get entry price base on positions
+	entryPrice := 0.0
+	if tpHitNumber == 1 {
+		tp2Position := getPositionByMessageIdAndTP(currentMessagePositions, messageId, 2)
+		if tp2Position != nil {
+			entryPrice = tp2Position.OpenPrice
+		}
+	}
+	if tpHitNumber == 2 {
+		tp3Position := getPositionByMessageIdAndTP(currentMessagePositions, messageId, 3)
+		if tp3Position != nil {
+			entryPrice = tp3Position.OpenPrice
+		}
+	}
+	if tpHitNumber == 3 {
+		tp3Position := getPositionByMessageIdAndTP(currentMessagePositions, messageId, 3)
+		if tp3Position != nil {
+			entryPrice = tp3Position.OpenPrice
+		}
+
+	}
+	tradeSuccess := false
+	// generate a telegram response for the bot
+	botMessage := fmt.Sprintf("✅ TP%d hit 🎉", tpHitNumber)
+	for _, position := range currentMessagePositions {
+		//
+		if entryPrice == 0 {
+			// safe
+			entryPrice = position.OpenPrice
+		}
+		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+		metaApiRequest := MetaApiTradeRequest{
+			ActionType: "POSITION_MODIFY",
+			StopLoss:   entryPrice,
+			PositionID: position.ID,
+		}
+		curentTp := extractTPFromClientId(position.ClientID)
+		// place all positions stop loss to their open price
+		for j := 0; j < 3; j++ {
+			trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, tgBot.AppConfig.MetaApiAccountID,
+				tgBot.AppConfig.MetaApiToken)
+			//
+			if err != nil {
+				log.Printf("Error placing trade: %v", err)
+				if j == 2 {
+					// send parsed error message from bot
+					// generate error message with reason
+					botErrorMessage := fmt.Sprintf("❌ Failed moving TP%d SL to entry price", curentTp)
+					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+						fmt.Sprintf("❌ Error: %s", err))
+					tgBot.sendMessage(botMessage, int(positionMessageId))
+				}
+				continue
+			}
+			errorTrade := HandleTradeError(trade.NumericCode)
+			if tradeErr, ok := errorTrade.(*TradeError); ok {
+				if tradeErr.Type == Success {
+					if !tradeSuccess {
+						tradeSuccess = true
+					}
+					if tradeErr.Type == Success {
+						log.Printf("Trade update placed successfully: %v", trade)
+						// append message to inform user that we moved the stop loss to the entry price of this current tp
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Moving TP%d SL to entry price", curentTp))
+						// append with values on next  line
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Position ID: %s\nSL: %.2f -> %.2f", position.ID, position.StopLoss, entryPrice))
+						// get message to reply to
+						// get chat message and reply to it
+						sendMessage, errM := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if errM != nil {
+							return errM
+						}
+						if sendMessage != nil {
+
+						}
+						break
+					} else {
+						time.Sleep(150 * time.Millisecond)
+						continue
+					}
+				} else {
+					// if last retry send error message
+					if j == 2 {
+						botErrorMessage := fmt.Sprintf("❌ Failed moving TP%d SL to entry price", curentTp)
+						botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+							fmt.Sprintf("❌ Error: %s", tradeErr.Description))
+						messageT, err := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if messageT != nil {
+
+						}
+						if err != nil {
+							log.Printf("Error sending message: %v", err)
+						}
+						break
+					}
+					time.Sleep(150 * time.Millisecond)
+					continue
+				}
+			} else {
+				if j == 2 {
+					botErrorMessage := fmt.Sprintf("❌ Failed moving TP%d SL to entry price", curentTp)
+					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+						fmt.Sprintf("❌ Error: %s", "Invalid code returned"))
+					tgBot.sendMessage(botMessage, int(positionMessageId))
+				}
+
+			}
+		}
+
+	}
+	return nil
+}
+
+func (tgBot *TgBot) doModifyStopLoss(request *TradeRequest, update *TradeUpdateRequest, positions []*MetaApiPosition, id string, token string) error {
+	// get entry price base on positions
+	tradeSuccess := false
+	// generate a telegram response for the bot
+	botMessage := fmt.Sprintf("✅ Modify stop loss 🎉")
+	for _, position := range positions {
+		//
+		if *update.Value == 0 {
+			// safe
+			update.Value = &position.OpenPrice
+		}
+		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+		metaApiRequest := MetaApiTradeRequest{
+			ActionType: "POSITION_MODIFY",
+			StopLoss:   *update.Value,
+			PositionID: position.ID,
+		}
+		// place all positions stop loss to their open price
+		for j := 0; j < 3; j++ {
+			trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, tgBot.AppConfig.MetaApiAccountID,
+				tgBot.AppConfig.MetaApiToken)
+			//
+			if err != nil {
+				log.Printf("Error placing trade: %v", err)
+				if j == 2 {
+					// send parsed error message from bot
+					// generate error message with reason
+					botErrorMessage := fmt.Sprintf("❌ Failed moving stop loss")
+					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+						fmt.Sprintf("❌ Error: %s", err))
+					tgBot.sendMessage(botMessage, int(positionMessageId))
+				}
+				continue
+			}
+			errorTrade := HandleTradeError(trade.NumericCode)
+			if tradeErr, ok := errorTrade.(*TradeError); ok {
+				if tradeErr.Type == Success {
+					if !tradeSuccess {
+						tradeSuccess = true
+					}
+					if tradeErr.Type == Success {
+						log.Printf("Trade update placed successfully: %v", trade)
+						// append message to inform user that we moved the stop loss to the entry price of this current tp
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Moving SL to %.2f", *update.Value))
+						// append with values on next  line
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Position ID: %s\nSL: %.2f -> %.2f", position.ID, position.StopLoss, *update.Value))
+						// get message to reply to
+						// get chat message and reply to it
+						sendMessage, errM := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if errM != nil {
+							return errM
+						}
+						if sendMessage != nil {
+
+						}
+						break
+					} else {
+						time.Sleep(150 * time.Millisecond)
+						continue
+					}
+				} else {
+					// if last retry send error message
+					if j == 2 {
+						botErrorMessage := fmt.Sprintf("❌ Failed moving stop loss")
+						botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+							fmt.Sprintf("❌ Error: %s", tradeErr.Description))
+						messageT, err := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if messageT != nil {
+
+						}
+						if err != nil {
+							log.Printf("Error sending message: %v", err)
+						}
+						break
+					}
+					time.Sleep(150 * time.Millisecond)
+					continue
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// close all positions and implement the same logic as breakeven
+func (tgBot *TgBot) doCloseTrade(request *TradeRequest, positions []*MetaApiPosition, id string, token string) error {
+	// get entry price base on positions
+	entryPrice := 0.0
+	tradeSuccess := false
+	// generate a telegram response for the bot
+	botMessage := fmt.Sprintf("✅ Close trade 🎉")
+	for _, position := range positions {
+		//
+		if entryPrice == 0 {
+			// safe
+			entryPrice = position.OpenPrice
+		}
+		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+		metaApiRequest := MetaApiTradeRequest{
+			ActionType: "POSITION_CLOSE_ID",
+			PositionID: position.ID,
+		}
+		// place all positions stop loss to their open price
+		for j := 0; j < 3; j++ {
+			trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, tgBot.AppConfig.MetaApiAccountID,
+				tgBot.AppConfig.MetaApiToken)
+			//
+			if err != nil {
+				log.Printf("Error placing trade: %v", err)
+				if j == 2 {
+					// send parsed error message from bot
+					// generate error message with reason
+					botErrorMessage := fmt.Sprintf("❌ Failed closing trade")
+					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+						fmt.Sprintf("❌ Error: %s", err))
+					tgBot.sendMessage(botMessage, int(positionMessageId))
+				}
+				continue
+			}
+			errorTrade := HandleTradeError(trade.NumericCode)
+			if tradeErr, ok := errorTrade.(*TradeError); ok {
+				if tradeErr.Type == Success {
+					if !tradeSuccess {
+						tradeSuccess = true
+					}
+					if tradeErr.Type == Success {
+						log.Printf("Trade update placed successfully: %v", trade)
+						// append message to inform user that we moved the stop loss to the entry price of this current tp
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Closed trade"))
+						// append with values on next  line
+						botMessage = fmt.Sprintf("%s\n%s", botMessage,
+							fmt.Sprintf("➡️Position ID: %s\n", position.ID))
+						// get message to reply to
+						// get chat message and reply to it
+						sendMessage, errM := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if errM != nil {
+							return errM
+						}
+						if sendMessage != nil {
+
+						}
+						break
+					} else {
+						time.Sleep(150 * time.Millisecond)
+						continue
+					}
+				} else {
+					// if last retry send error message
+					if j == 2 {
+						botErrorMessage := fmt.Sprintf("❌ Failed closing trade")
+						botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+							fmt.Sprintf("❌ Error: %s", tradeErr.Description))
+						messageT, err := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if messageT != nil {
+
+						}
+						if err != nil {
+							log.Printf("Error sending message: %v", err)
+						}
+						break
+					}
+					time.Sleep(150 * time.Millisecond)
+					continue
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func messageIsTradingSignal(m *tg.Message) bool {
+	// check if message contains certains terms
+	termsToSearch := []string{"buy", "sell", "entry", "exit", "long", "short", "close", "stop", "loss", "take", "profit", "tp", "sl",
+		"stoploss", "vente", "achete", "achat", "touche", "zone", "entry", "vend", "ferm", "securise"}
+	for _, term := range termsToSearch {
+		// use same case search
+		if m.Message != "" && strings.Contains(strings.ToLower(m.Message), term) {
+			return true
+		}
+	}
+	return false
+}
+func GenerateInitials(input string) string {
+	// Séparer les mots en fonction des espaces ou des caractères non-alphabétiques
+	words := strings.FieldsFunc(input, func(c rune) bool {
+		return !unicode.IsLetter(c)
+	})
+
+	// Construire les initiales
+	var initials string
+	for _, word := range words {
+		if len(word) > 0 {
+			initials += string(unicode.ToUpper(rune(word[0])))
+		}
+		// Limiter les initiales à 5 caractères maximum
+		if len(initials) >= 5 {
+			return initials[:5]
+		}
+	}
+
+	return initials
 }
 
 func setTradeRequestEntryZone(request *TradeRequest) *TradeRequest {
@@ -486,8 +899,12 @@ func getPositionsByMessageId(positions []MetaApiPosition, messageID int) []*Meta
 	var result []*MetaApiPosition
 	for _, position := range positions {
 		if position.ClientID != "" {
-			// regex to check if clientId start with message ID
-			re := regexp.MustCompile(`^` + strconv.Itoa(messageID))
+			// regex to check client id contain message
+			//	chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
+			//			clientId := fmt.Sprintf("%s_%s_%s", chanelInitials, strconv.Itoa(message.ID), "TP"+strconv.Itoa(i+1))
+			// Example : channelTitle@ChannelID_MessageID_TP2
+			// Example = TPA@564464_46456_TP2
+			re := regexp.MustCompile(`^[^@]+@\d+_` + strconv.Itoa(messageID) + `_TP\d+`)
 			if re.MatchString(position.ClientID) {
 				result = append(result, &position)
 			}
@@ -495,19 +912,32 @@ func getPositionsByMessageId(positions []MetaApiPosition, messageID int) []*Meta
 	}
 	return result
 }
-func getPositionsByMessageIdAndTP(positions []MetaApiPosition, messageID int, tpNumber int) []*MetaApiPosition {
+func getPositionByMessageIdAndTP(positions []*MetaApiPosition, messageID int, tpNumber int) *MetaApiPosition {
 	// search for position wich clientID start with messageID
-	var result []*MetaApiPosition
 	for _, position := range positions {
 		if position.ClientID != "" {
-			// regex to check if clientId start with message ID
-			re := regexp.MustCompile(`^` + strconv.Itoa(messageID) + `_TP` + strconv.Itoa(tpNumber))
+			// regex to check if clientId contain message id and tp number
+			re := regexp.MustCompile(`^[^@]+@\d+_` + strconv.Itoa(messageID) + `_TP` + strconv.Itoa(tpNumber))
 			if re.MatchString(position.ClientID) {
-				result = append(result, &position)
+				return position
 			}
 		}
 	}
-	return result
+	return nil
+}
+
+// extract tp from client id
+func extractTPFromClientId(clientID string) int {
+	re := regexp.MustCompile(`TP(\d+)`)
+	matches := re.FindStringSubmatch(clientID)
+	if len(matches) < 2 {
+		return 0
+	}
+	tp, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
+	return tp
 }
 
 type MetaApiPosition struct {

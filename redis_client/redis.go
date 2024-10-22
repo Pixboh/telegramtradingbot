@@ -219,3 +219,68 @@ func (rdClient *RedisClient) GetChatId() int64 {
 	chatIdInt, _ := strconv.ParseInt(chatId.Val(), 10, 64)
 	return chatIdInt
 }
+
+// store a list of trade request key
+// add trade key
+func (rdClient *RedisClient) AddTradeKey(tradeKey string) {
+	rdClient.Rdb.SAdd(context.Background(), "trade_keys", tradeKey)
+}
+
+// remove trade key
+func (rdClient *RedisClient) RemoveTradeKey(tradeKey string) {
+	rdClient.Rdb.SRem(context.Background(), "trade_keys", tradeKey)
+}
+
+// get all trade keys
+func (rdClient *RedisClient) GetTradeKeys() []string {
+	tradeKeys := rdClient.Rdb.SMembers(context.Background(), "trade_keys")
+	if tradeKeys.Err() != nil {
+		return nil
+	}
+	return tradeKeys.Val()
+}
+
+// is trade key
+func (rdClient *RedisClient) IsTradeKeyExist(tradeKey string) bool {
+	tradeKeys := rdClient.Rdb.SMembers(context.Background(), "trade_keys")
+	if tradeKeys.Err() != nil {
+		return false
+	}
+	for _, tk := range tradeKeys.Val() {
+		if tk == tradeKey {
+			return true
+		}
+	}
+	return false
+}
+
+// position message
+// set message id
+func (rdClient *RedisClient) SetPositionMessageId(positionId string, messageId int64) {
+	rdClient.Rdb.HSet(context.Background(), "position_id", positionId, strconv.FormatInt(messageId, 10))
+}
+
+// get message id
+func (rdClient *RedisClient) GetPositionMessageId(positionId string) int64 {
+	messageId := rdClient.Rdb.HGet(context.Background(), "position_id", positionId)
+	if messageId.Err() != nil {
+		return 0
+	}
+	messageIdInt, _ := strconv.ParseInt(messageId.Val(), 10, 64)
+	return messageIdInt
+}
+
+func (r *RedisClient) SetRiskPercentage(risk float64) {
+	// Stocker le pourcentage dans Redis
+	r.Rdb.Set(ctx, "risk_percentage", risk, 0)
+}
+
+func (r *RedisClient) GetRiskPercentage() float64 {
+	// Obtenir le pourcentage depuis Redis
+	risk := r.Rdb.Get(ctx, "risk_percentage")
+	if risk.Err() != nil {
+		return 0
+	}
+	riskFloat, _ := strconv.ParseFloat(risk.Val(), 64)
+	return riskFloat
+}
