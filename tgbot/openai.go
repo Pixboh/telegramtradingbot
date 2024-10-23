@@ -67,7 +67,7 @@ func (tgBot *TgBot) GptParseNewMessage(message string, apiKey string, symbols []
 				},
 				{
 					Role:    "user",
-					Content: "BUY BTCUSD \n\nEntry price 62200\n\n🔴 SL : 61300\n\n🟢 TP1 : 62500\n\n🟢 TP2 : 62800\n\n🟢 TP3 : 63300\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
+					Content: "BUY BTCUSD \n\nEntry price 62200\n\n🔴 SL : 61300\n\n🟢 TP1 : 62500\n\n🟢 TP2 : 62800\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
 				},
 				{
 					Role: "assistant",
@@ -77,14 +77,14 @@ func (tgBot *TgBot) GptParseNewMessage(message string, apiKey string, symbols []
   "stopLoss": 61300,
   "takeProfit1": 62500,
   "takeProfit2": 62800,
-  "takeProfit3": 63300, 
+  "takeProfit3": 0, 
   "entryZoneMin": 62200,
   "entryZoneMax": -1 
 }`,
 				},
 				{
 					Role:    "user",
-					Content: "SELL BTCUSD\n\nEntry price 61340\n\n🔴 SL : 62340\n\n🟢 TP1 : 61100\n\n🟢 TP2 : 60830\n\n🟢 TP3 : 60340\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
+					Content: "SELL BTCUSD\n\nEntry price 61340\n\n🔴 SL : 62340\n\n🟢 TP1 : 61100\n\n🟢 TP2 : OUVERT\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
 				},
 				{
 					Role: "assistant",
@@ -93,11 +93,45 @@ func (tgBot *TgBot) GptParseNewMessage(message string, apiKey string, symbols []
   "symbol": "BTCUSD",
   "stopLoss": 62340,
   "takeProfit1": 61100,
-  "takeProfit2": 60830,
-  "takeProfit3": 60340, 
+  "takeProfit2": -1,
+  "takeProfit3": 0, 
   "entryZoneMin": 61340,
   "entryZoneMax": -1 
 }`,
+				},
+				{
+					Role:    "user",
+					Content: "SELL BTCUSD\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "actionType": "ORDER_TYPE_SELL",
+  "symbol": "BTCUSD",
+  "stopLoss": 0,
+  "takeProfit1": -1,
+  "takeProfit2": 0,
+  "takeProfit3": 0, 
+  "entryZoneMin": -1,
+  "entryZoneMax": -1 
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "🔴 VENTE GOLD (2)🍯 \n\nZone d'entrée : 2667 - 2666.5",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+				 "actionType": "ORDER_TYPE_SELL",
+				 "symbol": "XAUUSD",
+				 "stopLoss": 0,
+				 "takeProfit1": -1,
+				 "takeProfit2": 0,
+				 "takeProfit3": 0,
+				 "entryZoneMin": 2666.5,
+				 "entryZoneMax": 2667
+				}`,
 				},
 				{
 					Role:    "user",
@@ -136,6 +170,24 @@ func (tgBot *TgBot) GptParseNewMessage(message string, apiKey string, symbols []
 				},
 				{
 					Role:    "user",
+					Content: "USDJPY BUY Entry at 148.15\n DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
+				},
+				{
+					Role: "assistant",
+					Content: ` {
+  "actionType": "ORDER_TYPE_BUY",
+  "symbol": "USDJPY",
+  "stopLoss": 0,
+  "takeProfit1": -1,
+  "takeProfit2": 0,
+  "takeProfit3": 0, 
+  "entryZoneMin": 148.15,
+  "entryZoneMax": -1
+}
+`,
+				},
+				{
+					Role:    "user",
 					Content: "USDJPY BUY Entry at 148.20\n\n🔴Stop loss :  147.60\n\n🟢Take profit 1 = 148.53\n🟢Take profit 2 = 148.83\n🟢Take profit 3 = 149.33\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
 				},
 				{
@@ -147,6 +199,42 @@ func (tgBot *TgBot) GptParseNewMessage(message string, apiKey string, symbols []
   "takeProfit1": 148.53,
   "takeProfit2": 148.83,
   "takeProfit3": 149.33, 
+  "entryZoneMin": 148.20,
+  "entryZoneMax": -1 
+}
+`,
+				},
+				{
+					Role:    "user",
+					Content: "USDJPY BUY Entry at 148.20\n\n🔴Stop loss :  147.60\n\n🟢Take profit 1 = 148.53\n🟢Take profit 2 = 148.83\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
+				},
+				{
+					Role: "assistant",
+					Content: ` {
+  "actionType": "ORDER_TYPE_BUY",
+  "symbol": "USDJPY",
+  "stopLoss": 147.60,
+  "takeProfit1": 148.53,
+  "takeProfit2": 148.83,
+  "takeProfit3": 0, 
+  "entryZoneMin": 148.20,
+  "entryZoneMax": -1 
+}
+`,
+				},
+				{
+					Role:    "user",
+					Content: "USDJPY BUY Entry at 148.20\n\n🔴Stop loss :  147.60\n\n🟢Take profit 1 = 148.53\n🟢Take profit 2 = 148.83\n🟢Take profit 3 = OPEN\n\n⚠️ DISCLAIMER : Il ne s’agit en aucun cas d’un conseil en investissement, mais uniquement d’une alerte à titre éducatif",
+				},
+				{
+					Role: "assistant",
+					Content: ` {
+  "actionType": "ORDER_TYPE_BUY",
+  "symbol": "USDJPY",
+  "stopLoss": 147.60,
+  "takeProfit1": 148.53,
+  "takeProfit2": 148.83,
+  "takeProfit3": -1, 
   "entryZoneMin": 148.20,
   "entryZoneMax": -1 
 }

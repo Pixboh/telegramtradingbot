@@ -124,7 +124,9 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 			log.Printf("Symbol %s is not allowed", tradeRequest.Symbol)
 			return nil, nil, errors.New("symbol is not allowed")
 		}
-		errTrade := validateTradeValue(tradeRequest)
+		strategy := tgBot.RedisClient.GetStrategy()
+
+		errTrade := validateTradeValue(tradeRequest, strategy)
 		// check if the same trade already exist
 		if tgBot.RedisClient.IsTradeKeyExist(tradeRequest.GenerateTradeRequestKey()) {
 			log.Printf("Trade already placed")
@@ -164,10 +166,9 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		//}
 
 		// Proceed with the trade
-		metaApiRequests := ConvertToMetaApiTradeRequests(*tradeRequest)
+		metaApiRequests := ConvertToMetaApiTradeRequests(*tradeRequest, strategy)
 		// trade response list
 		var tradeResponses []TradeResponse
-		strategy := tgBot.RedisClient.GetStrategy()
 		tradeSuccess := false
 		for i, metaApiRequest := range metaApiRequests {
 			if strategy == "TP1" {
@@ -192,7 +193,7 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 				takeProfit = tradeRequest.TakeProfit3
 			}
 			tpNumber := i + 1
-			metaApiRequest.Volume = volume
+			metaApiRequest.Volume = &volume
 			// concat channel id and channel initial
 			chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
 			clientId := fmt.Sprintf("%s_%s_%s", chanelInitials, strconv.Itoa(message.ID), "TP"+strconv.Itoa(i+1))
@@ -333,22 +334,58 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		if tradeUpdate.UpdateType == "TP1_HIT" {
 			// do breakeven
 			//	if tp1 hit modify SL to tp 1 value on all other TP
-			errBreakEven := tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 1)
-			if errBreakEven != nil {
+			if parentRequest.TakeProfit1 == -1 {
+				// manual close tp1
+				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 1)
+				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
+					customPositions := []*MetaApiPosition{positionTP1}
+					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
+					positions, err = currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+					if err != nil {
+						return nil, nil, err
+					}
+					currentMessagePositions = getPositionsByMessageId(positions, *parentRequest.MessageId)
+				}
 
 			}
-
+			tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 1)
 		} else if tradeUpdate.UpdateType == "TP2_HIT" {
-			errBreakEven := tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 2)
-			if errBreakEven != nil {
+			// do breakeven
+			//	if tp1 hit modify SL to tp 1 value on all other TP
+			if parentRequest.TakeProfit2 == -1 {
+				// manual close tp1
+				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 2)
+				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
+					customPositions := []*MetaApiPosition{positionTP1}
+					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
+					positions, err = currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+					if err != nil {
+						return nil, nil, err
+					}
+					currentMessagePositions = getPositionsByMessageId(positions, *parentRequest.MessageId)
+				}
 
 			}
+			tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 2)
 		} else if tradeUpdate.UpdateType == "TP3_HIT" {
-			// pull all SL to takeprofit3
-			errBreakEven := tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 3)
-			if errBreakEven != nil {
+			// do breakeven
+			//	if tp1 hit modify SL to tp 1 value on all other TP
+			if parentRequest.TakeProfit3 == -1 {
+				// manual close tp1
+				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 3)
+				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
+					customPositions := []*MetaApiPosition{positionTP1}
+					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
+					positions, err = currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+					if err != nil {
+						return nil, nil, err
+					}
+					currentMessagePositions = getPositionsByMessageId(positions, *parentRequest.MessageId)
+				}
 
 			}
+			tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 3)
+
 		} else if tradeUpdate.UpdateType == "CLOSE_TRADE" {
 			// close all positions
 			errClodeTrade := tgBot.doCloseTrade(parentRequest, currentMessagePositions, metaApiAccountId, metaApiToken)
@@ -387,8 +424,8 @@ func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []*MetaApi
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_MODIFY",
-			StopLoss:   position.OpenPrice,
-			PositionID: position.ID,
+			StopLoss:   &position.OpenPrice,
+			PositionID: &position.ID,
 		}
 		// place all positions stop loss to their open price
 		for j := 0; j < 3; j++ {
@@ -456,39 +493,21 @@ func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []*MetaApi
 func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel, currentMessagePositions []*MetaApiPosition, messageId int, tpHitNumber int) error {
 	// get entry price base on positions
 	entryPrice := 0.0
-	if tpHitNumber == 1 {
-		tp2Position := getPositionByMessageIdAndTP(currentMessagePositions, messageId, 2)
-		if tp2Position != nil {
-			entryPrice = tp2Position.OpenPrice
-		}
-	}
-	if tpHitNumber == 2 {
-		tp3Position := getPositionByMessageIdAndTP(currentMessagePositions, messageId, 3)
-		if tp3Position != nil {
-			entryPrice = tp3Position.OpenPrice
-		}
-	}
-	if tpHitNumber == 3 {
-		tp3Position := getPositionByMessageIdAndTP(currentMessagePositions, messageId, 3)
-		if tp3Position != nil {
-			entryPrice = tp3Position.OpenPrice
-		}
 
-	}
 	tradeSuccess := false
 	// generate a telegram response for the bot
 	botMessage := fmt.Sprintf("✅ TP%d hit 🎉", tpHitNumber)
 	for _, position := range currentMessagePositions {
 		//
-		if entryPrice == 0 {
-			// safe
-			entryPrice = position.OpenPrice
-		}
+		// safe
+		entryPrice = position.OpenPrice
+		// add a litle margin
+		entryPrice = entryPrice + 0.04
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_MODIFY",
-			StopLoss:   entryPrice,
-			PositionID: position.ID,
+			StopLoss:   &entryPrice,
+			PositionID: &position.ID,
 		}
 		curentTp := extractTPFromClientId(position.ClientID)
 		// place all positions stop loss to their open price
@@ -504,7 +523,7 @@ func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel,
 					botErrorMessage := fmt.Sprintf("❌ Failed moving TP%d SL to entry price", curentTp)
 					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
 						fmt.Sprintf("❌ Error: %s", err))
-					tgBot.sendMessage(botMessage, int(positionMessageId))
+					tgBot.sendMessage(botErrorMessage, int(positionMessageId))
 				}
 				continue
 			}
@@ -542,7 +561,7 @@ func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel,
 						botErrorMessage := fmt.Sprintf("❌ Failed moving TP%d SL to entry price", curentTp)
 						botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
 							fmt.Sprintf("❌ Error: %s", tradeErr.Description))
-						messageT, err := tgBot.sendMessage(botMessage, int(positionMessageId))
+						messageT, err := tgBot.sendMessage(botErrorMessage, int(positionMessageId))
 						if messageT != nil {
 
 						}
@@ -559,7 +578,7 @@ func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel,
 					botErrorMessage := fmt.Sprintf("❌ Failed moving TP%d SL to entry price", curentTp)
 					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
 						fmt.Sprintf("❌ Error: %s", "Invalid code returned"))
-					tgBot.sendMessage(botMessage, int(positionMessageId))
+					tgBot.sendMessage(botErrorMessage, int(positionMessageId))
 				}
 
 			}
@@ -583,8 +602,8 @@ func (tgBot *TgBot) doModifyStopLoss(request *TradeRequest, update *TradeUpdateR
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_MODIFY",
-			StopLoss:   *update.Value,
-			PositionID: position.ID,
+			StopLoss:   update.Value,
+			PositionID: &position.ID,
 		}
 		// place all positions stop loss to their open price
 		for j := 0; j < 3; j++ {
@@ -671,7 +690,7 @@ func (tgBot *TgBot) doCloseTrade(request *TradeRequest, positions []*MetaApiPosi
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_CLOSE_ID",
-			PositionID: position.ID,
+			PositionID: &position.ID,
 		}
 		// place all positions stop loss to their open price
 		for j := 0; j < 3; j++ {
@@ -748,7 +767,7 @@ func messageIsTradingSignal(m *tg.Message) bool {
 		"stoploss", "vente", "achete", "achat", "touche", "zone", "entry", "vend", "ferm", "securise"}
 	for _, term := range termsToSearch {
 		// use same case search
-		if m.Message != "" && strings.Contains(strings.ToLower(m.Message), term) {
+		if m != nil && m.Message != "" && strings.Contains(strings.ToLower(m.Message), term) {
 			return true
 		}
 	}
@@ -793,15 +812,9 @@ func setTradeRequestEntryZone(request *TradeRequest) *TradeRequest {
 	return request
 }
 
-func validateTradeValue(r *TradeRequest) error {
+func validateTradeValue(r *TradeRequest, strategy string) error {
 	// check if takeprofit1 is set
-	if r.TakeProfit1 == 0 {
-		return errors.New("takeprofit1 is required")
-	}
-	// check if stoploss is set
-	if r.StopLoss == 0 {
-		return errors.New("stoploss is required")
-	}
+
 	// check if volume is set
 	if r.Volume == 0 {
 		return errors.New("volume is required")
@@ -816,56 +829,25 @@ func validateTradeValue(r *TradeRequest) error {
 	}
 	// value coerence check
 	// if buy
-	if r.ActionType == "ORDER_TYPE_BUY" {
-		if r.TakeProfit1 <= r.EntryZoneMin {
-			return errors.New("takeprofit1 must be greater than entryZoneMin")
+	if r.TakeProfit1 == -1 {
+		if strategy == "TP2" {
+			if r.TakeProfit2 == 0 {
+				r.TakeProfit2 = -1
+			}
 		}
-		if r.StopLoss >= r.EntryZoneMin {
-			return errors.New("stoploss must be less than entryZoneMin")
-		}
-		if r.TakeProfit1 <= r.StopLoss {
-			return errors.New("takeprofit1 must be greater than stoploss")
-		}
-	} else if r.ActionType == "ORDER_TYPE_SELL" {
-		if r.TakeProfit1 >= r.EntryZoneMin {
-			return errors.New("takeprofit1 must be less than entryZoneMin")
-		}
-		if r.StopLoss <= r.EntryZoneMin {
-			return errors.New("stoploss must be greater than entryZoneMin")
-		}
-		if r.TakeProfit1 >= r.StopLoss {
-			return errors.New("takeprofit1 must be less than stoploss")
+		if strategy == "3TP" || strategy == "TP3" {
+			if r.TakeProfit2 == 0 {
+				r.TakeProfit2 = -1
+			}
+			if r.TakeProfit3 == 0 {
+				r.TakeProfit3 = -1
+			}
 		}
 	}
-
 	return nil
 
 }
 
-func ExtractReplyToMessageId(input string) (int, error) {
-	// Define a regular expression pattern to match "ReplyToMsgID:<some number>"
-	re := regexp.MustCompile(`ReplyToMsgID:(\d+)`)
-
-	// Find the first match in the input string
-	matches := re.FindStringSubmatch(input)
-
-	if len(matches) < 2 {
-		return 0, fmt.Errorf("ReplyToMsgID not found in the input string")
-	}
-
-	// Convert the matched ReplyToMsgID to an integer
-	replyToMsgID, err := strconv.Atoi(matches[1])
-	if err != nil {
-		return 0, fmt.Errorf("failed to convert ReplyToMsgID to integer: %w", err)
-	}
-
-	return replyToMsgID, nil
-}
-
-// curl to get curent user positions
-// curl --location 'https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/993fc6b0-60eb-47c2-bc71-f1c149275153/positions' \
-// --header 'auth-token: bearerToken' \
-// --header 'Accept: application/json'
 func currentUserPositions(endpoint string, metaApiAccountId, metaApiToken string) ([]MetaApiPosition, error) {
 	url := fmt.Sprintf("%s/users/current/accounts/%s/positions", endpoint, metaApiAccountId)
 
@@ -893,6 +875,26 @@ func currentUserPositions(endpoint string, metaApiAccountId, metaApiToken string
 	return positions, nil
 }
 
+func ExtractReplyToMessageId(input string) (int, error) {
+	// Define a regular expression pattern to match "ReplyToMsgID:<some number>"
+	re := regexp.MustCompile(`ReplyToMsgID:(\d+)`)
+
+	// Find the first match in the input string
+	matches := re.FindStringSubmatch(input)
+
+	if len(matches) < 2 {
+		return 0, fmt.Errorf("ReplyToMsgID not found in the input string")
+	}
+
+	// Convert the matched ReplyToMsgID to an integer
+	replyToMsgID, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, fmt.Errorf("failed to convert ReplyToMsgID to integer: %w", err)
+	}
+
+	return replyToMsgID, nil
+}
+
 // get position by messageID containing in the clientID field with. Example for clientId 6203_TP2_pending 6203 is the messageID
 func getPositionsByMessageId(positions []MetaApiPosition, messageID int) []*MetaApiPosition {
 	// search for position wich clientID start with messageID
@@ -912,6 +914,7 @@ func getPositionsByMessageId(positions []MetaApiPosition, messageID int) []*Meta
 	}
 	return result
 }
+
 func getPositionByMessageIdAndTP(positions []*MetaApiPosition, messageID int, tpNumber int) *MetaApiPosition {
 	// search for position wich clientID start with messageID
 	for _, position := range positions {
@@ -974,26 +977,26 @@ type MetaApiPosition struct {
 type MetaApiTradeRequest struct {
 	ActionType          string            `json:"actionType,omitempty,omitempty"`
 	Symbol              string            `json:"symbol,omitempty"`
-	Volume              float64           `json:"volume,omitempty"`
-	OpenPrice           float64           `json:"openPrice,omitempty"`
-	StopLimitPrice      float64           `json:"stopLimitPrice,omitempty"`
-	StopLoss            float64           `json:"stopLoss,omitempty"`
-	TakeProfit          float64           `json:"takeProfit,omitempty"`
-	StopLossUnits       string            `json:"stopLossUnits,omitempty"`
-	TakeProfitUnits     string            `json:"takeProfitUnits,omitempty"`
-	StopPriceBase       string            `json:"stopPriceBase,omitempty"`
-	OpenPriceUnits      string            `json:"openPriceUnits,omitempty"`
-	OpenPriceBase       string            `json:"openPriceBase,omitempty"`
-	StopLimitPriceUnits string            `json:"stopLimitPriceUnits,omitempty"`
-	StopLimitPriceBase  string            `json:"stopLimitPriceBase,omitempty"`
+	Volume              *float64          `json:"volume,omitempty"`
+	OpenPrice           *float64          `json:"openPrice,omitempty"`
+	StopLimitPrice      *float64          `json:"stopLimitPrice,omitempty"`
+	StopLoss            *float64          `json:"stopLoss,omitempty"`
+	TakeProfit          *float64          `json:"takeProfit,omitempty"`
+	StopLossUnits       *string           `json:"stopLossUnits,omitempty"`
+	TakeProfitUnits     *string           `json:"takeProfitUnits,omitempty"`
+	StopPriceBase       *string           `json:"stopPriceBase,omitempty"`
+	OpenPriceUnits      *string           `json:"openPriceUnits,omitempty"`
+	OpenPriceBase       *string           `json:"openPriceBase,omitempty"`
+	StopLimitPriceUnits *string           `json:"stopLimitPriceUnits,omitempty"`
+	StopLimitPriceBase  *string           `json:"stopLimitPriceBase,omitempty"`
 	TrailingStopLoss    *TrailingStopLoss `json:"trailingStopLoss,omitempty"`
-	OrderID             string            `json:"orderId,omitempty"`
-	PositionID          string            `json:"positionId,omitempty"`
-	CloseByPositionID   string            `json:"closeByPositionId,omitempty"`
+	OrderID             *string           `json:"orderId,omitempty"`
+	PositionID          *string           `json:"positionId,omitempty"`
+	CloseByPositionID   *string           `json:"closeByPositionId,omitempty"`
 	Comment             *string           `json:"comment,omitempty"`
 	ClientID            *string           `json:"clientId,omitempty"`
-	Magic               float64           `json:"magic,omitempty"`
-	Slippage            float64           `json:"slippage,omitempty"`
+	Magic               *float64          `json:"magic,omitempty"`
+	Slippage            *float64          `json:"slippage,omitempty"`
 	FillingModes        []string          `json:"fillingModes,omitempty"`
 	Expiration          *Expiration       `json:"expiration,omitempty"`
 }
@@ -1018,21 +1021,19 @@ type Expiration struct {
 	Time string `json:"time,omitempty"`
 }
 
-func ConvertToMetaApiTradeRequests(trade TradeRequest) []MetaApiTradeRequest {
+func ConvertToMetaApiTradeRequests(trade TradeRequest, strategy string) []MetaApiTradeRequest {
 	var metaApiRequests []MetaApiTradeRequest
 
 	tpValues := []float64{trade.TakeProfit1, trade.TakeProfit2, trade.TakeProfit3}
 
 	for _, tp := range tpValues {
-		//comment := fmt.Sprintf("Trade for TP%d", i+1)
 
-		if tp > 0 { // Only create requests for defined TPs
+		//comment := fmt.Sprintf("Trade for TP%d", i+1)
+		if tp == -1 || tp > 0 {
 			metaTrade := MetaApiTradeRequest{
 				ActionType: trade.ActionType,
 				Symbol:     trade.Symbol,
-				Volume:     trade.Volume, // Assuming volume is the same for all trades
-				StopLoss:   trade.StopLoss,
-				TakeProfit: tp,
+				Volume:     &trade.Volume, // Assuming volume is the same for all trades
 				//OpenPriceUnits:      "RELATIVE_BALANCE_PERCENTAGE",
 				//OpenPriceBase:       "OPEN_PRICE",
 				//StopLimitPriceUnits: "RELATIVE_POINTS",
@@ -1045,6 +1046,12 @@ func ConvertToMetaApiTradeRequests(trade TradeRequest) []MetaApiTradeRequest {
 				//},
 			}
 
+			if tp > 0 {
+				metaTrade.TakeProfit = &tp
+			}
+			if trade.StopLoss > 0 {
+				metaTrade.StopLoss = &trade.StopLoss
+			}
 			metaApiRequests = append(metaApiRequests, metaTrade)
 		}
 	}
@@ -1123,3 +1130,19 @@ func fetchAllSymbols(endpoint string, metaApiAccountId, metaApiToken string) ([]
 
 	return symbols, nil
 }
+
+/**
+[Unit]
+Description=tradingbot
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5s
+ExecStart=/home/ubuntu/telegramtradingbot/main
+
+
+[Install]
+WantedBy=multi-user.target
+~
+*/
