@@ -305,7 +305,7 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				{
 					Role: "user",
 					Content: "Voici les different update types qui existe : TP1_HIT , TP2_HIT, TP3_HIT, TP4_HIT ," +
-						" STOPLOSS_HIT, CLOSE_TRADE, CLOSE_TO_ENTRY_PRICE, MODIFY_STOPLOSS , SL_TO_ENTRY_PRICE",
+						" STOPLOSS_HIT, CLOSE_TRADE, MODIFY_STOPLOSS , SL_TO_ENTRY_PRICE",
 				},
 				{
 					Role:    "assistant",
@@ -397,7 +397,7 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				{
 					Role: "assistant",
 					Content: `{
-  "updateType": "CLOSE_TO_ENTRY_PRICE"
+  "updateType": "CLOSE_TRADE"
 }`,
 				},
 				{

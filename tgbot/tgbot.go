@@ -97,7 +97,7 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 	}()
 
 	// check open api
-	defaultVolume := 0.01
+	defaultVolume := tgBot.RedisClient.GetTradingVolume()
 	openaiApiKey := tgBot.AppConfig.OpenAiToken
 	metaApiToken := tgBot.AppConfig.MetaApiToken
 	metaApiAccountId := tgBot.AppConfig.MetaApiAccountID

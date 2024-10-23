@@ -426,6 +426,7 @@ func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []*MetaApi
 			ActionType: "POSITION_MODIFY",
 			StopLoss:   &position.OpenPrice,
 			PositionID: &position.ID,
+			TakeProfit: &position.TakeProfit,
 		}
 		// place all positions stop loss to their open price
 		for j := 0; j < 3; j++ {
@@ -508,6 +509,7 @@ func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel,
 			ActionType: "POSITION_MODIFY",
 			StopLoss:   &entryPrice,
 			PositionID: &position.ID,
+			TakeProfit: &position.TakeProfit,
 		}
 		curentTp := extractTPFromClientId(position.ClientID)
 		// place all positions stop loss to their open price
@@ -604,6 +606,7 @@ func (tgBot *TgBot) doModifyStopLoss(request *TradeRequest, update *TradeUpdateR
 			ActionType: "POSITION_MODIFY",
 			StopLoss:   update.Value,
 			PositionID: &position.ID,
+			TakeProfit: &position.TakeProfit,
 		}
 		// place all positions stop loss to their open price
 		for j := 0; j < 3; j++ {
@@ -997,7 +1000,7 @@ type MetaApiTradeRequest struct {
 	ClientID            *string           `json:"clientId,omitempty"`
 	Magic               *float64          `json:"magic,omitempty"`
 	Slippage            *float64          `json:"slippage,omitempty"`
-	FillingModes        []string          `json:"fillingModes,omitempty"`
+	FillingModes        *[]string         `json:"fillingModes,omitempty"`
 	Expiration          *Expiration       `json:"expiration,omitempty"`
 }
 
