@@ -179,6 +179,10 @@ func (rdClient *RedisClient) GetSymbols() []string {
 
 // is symbol
 func (rdClient *RedisClient) IsSymbolExist(symbol string) bool {
+	// if all symbols return true
+	if rdClient.GetAllSymbols() {
+		return true
+	}
 	symbols := rdClient.Rdb.SMembers(context.Background(), "symbols")
 	if symbols.Err() != nil {
 		return false
@@ -189,6 +193,21 @@ func (rdClient *RedisClient) IsSymbolExist(symbol string) bool {
 		}
 	}
 	return false
+}
+
+// boolean to authorize all symbols
+func (rdClient *RedisClient) SetAllSymbols(allSymbols bool) {
+	rdClient.Rdb.Set(context.Background(), "all_symbols", allSymbols, 0)
+}
+
+// get all symbols
+func (rdClient *RedisClient) GetAllSymbols() bool {
+	allSymbols := rdClient.Rdb.Get(context.Background(), "all_symbols")
+	if allSymbols.Err() != nil {
+		return false
+	}
+	allSymbolsBool, _ := strconv.ParseBool(allSymbols.Val())
+	return allSymbolsBool
 }
 
 // set strategy

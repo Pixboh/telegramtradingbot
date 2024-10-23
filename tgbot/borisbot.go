@@ -227,7 +227,7 @@ func (tgBot *TgBot) setSymbols(b *gotgbot.Bot, ctx *ext.Context, page int) error
 	_ = append(selectedSymbols, unselectedSymbols...)
 
 	// Calculer le nombre total de pages
-	totalPages := (len(unselectedSymbols) + symbolsPerPage - 1) / symbolsPerPage
+	totalPages := (len(unselectedSymbols) + len(selectedSymbols) + symbolsPerPage - 1) / symbolsPerPage
 	if page >= totalPages {
 		page = totalPages - 1
 	}
@@ -248,6 +248,17 @@ func (tgBot *TgBot) setSymbols(b *gotgbot.Bot, ctx *ext.Context, page int) error
 
 	// Créer le clavier inline avec les boutons pour chaque symbole
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	// add a button to allow all symbols
+	textAuthorizeAll := "Authorize All"
+	if tgBot.RedisClient.GetAllSymbols() {
+		textAuthorizeAll = textAuthorizeAll + " ✅"
+	}
+	inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+		{
+			Text:         textAuthorizeAll,
+			CallbackData: fmt.Sprintf("authorize_all_symb"),
+		},
+	})
 	for _, symbol := range displaySymbols {
 		text := symbol
 		if tgBot.RedisClient.IsSymbolExist(symbol) {
@@ -598,6 +609,15 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		return tgBot.paginateChannels(b, ctx, 0)
 	case "set_volume":
 		return tgBot.setTradeVolume(b, ctx, false)
+	case "authorize_all_symb":
+		{
+			if tgBot.RedisClient.GetAllSymbols() {
+				tgBot.RedisClient.SetAllSymbols(false)
+			} else {
+				tgBot.RedisClient.SetAllSymbols(true)
+			}
+			return tgBot.setSymbols(b, ctx, 0)
+		}
 	default:
 	}
 	return nil
