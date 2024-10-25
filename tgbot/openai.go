@@ -505,8 +505,20 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				},
 				{
 					Role:    "user",
+					Content: "Round 3 SNIPER ENTRY TP1//30pips✅\n\nLet’s CLOSE our profit now and set breakeven if you wish to hold now‼\n\nNonstop smashing TP with me ",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "TP1_HIT",
+  "value" : 149
+}`,
+				},
+				{
+					Role:    "user",
 					Content: "Exemple: ⚠️ Securisez le trade",
 				},
+
 				{
 					Role: "assistant",
 					Content: `{
@@ -516,6 +528,57 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				{
 					Role:    "user",
 					Content: "Exemple: +30pips securisez",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "SL_TO_ENTRY_PRICE"
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple: Let’s move our SL to 2719.7 temporarily traders! ",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "MODIFY_STOPLOSS",
+	"value" : 2719.7
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple: Boom 50 Pips Instant Recover 🔥\n\nSecure Half Now And Set Breakeven Don't be Greedy ",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "SL_TO_ENTRY_PRICE"
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple: 30PIPS LET’S GOOOOO✅\n\nCLOSE our profit now‼\n\nLet's be smart. If you plan to keep chasing, secure your gains and trail your SL to the entry price.🙌 ",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "SL_TO_ENTRY_PRICE"
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple:Bangggg🔫🔫\n\nInstant money +20pips bro⚡  ",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "SL_TO_ENTRY_PRICE"
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple: So easy! Non stop profit bro, our sell trade instant hit our 1st tp again 50pips+🤣🎊\n\nclose half profit & set breakeven now  ",
 				},
 				{
 					Role: "assistant",
