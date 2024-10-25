@@ -729,9 +729,19 @@ func (tgBot *TgBot) sendMessage(message string, replyToMessageID int) (*gotgbot.
 	chatID := tgBot.RedisClient.GetChatId()
 	if replyToMessageID != 0 {
 		return tgBot.Bot.SendMessage(chatID, message, &gotgbot.SendMessageOpts{
+			BusinessConnectionId: "",
+			MessageThreadId:      0,
+			ParseMode:            "",
+			Entities:             nil,
+			LinkPreviewOptions:   nil,
+			DisableNotification:  false,
+			ProtectContent:       false,
+			MessageEffectId:      "",
 			ReplyParameters: &gotgbot.ReplyParameters{
 				MessageId: int64(replyToMessageID),
 			},
+			ReplyMarkup: nil,
+			RequestOpts: nil,
 		})
 	} else {
 		return tgBot.Bot.SendMessage(chatID, message, nil)

@@ -2,7 +2,6 @@ package tgbot
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -103,25 +102,51 @@ func fetchCurrentPrice(symbol, metaApiAccountId, metaApiToken string) (*MetaApiP
 	return &priceResponse, nil
 }
 
-func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message, openaiApiKey, metaApiAccountId,
-	metaApiToken string, volume float64, parentRequest *TradeRequest, channel tg.Channel) (*TradeRequest, *[]TradeResponse, error) {
+type HandleRequestInput struct {
+	MessageId         int
+	Message           string
+	ParentRequest     *TradeRequest
+	ChannelID         int64
+	ChannelName       string
+	ChannelAccessHash int64
+}
+
+func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest, *[]TradeResponse, error) {
 	// Parse the incoming message into a TradeRequest
 	symbols, err := fetchAllSymbols(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 	if err != nil {
 		log.Printf("Error fetching symbols: %v", err)
+		tgBot.sendMessage(fmt.Sprintf("❌ Error fetching symbols from MetaApi : %v", err), 0)
 		return nil, nil, err
 	}
+	volume := tgBot.RedisClient.GetTradingVolume()
+	openaiApiKey := tgBot.AppConfig.OpenAiToken
+	metaApiToken := tgBot.AppConfig.MetaApiToken
+	metaApiAccountId := tgBot.AppConfig.MetaApiAccountID
+	channel := tg.Channel{
+		ID:    input.ChannelID,
+		Title: input.ChannelName,
+	}
+	messageId := input.MessageId
+	message := input.Message
+	parentRequest := input.ParentRequest
 	if parentRequest == nil {
 
-		tradeRequest, err := tgBot.GptParseNewMessage(message.Message, openaiApiKey, symbols)
+		tradeRequest, err := tgBot.GptParseNewMessage(input.Message, tgBot.AppConfig.OpenAiToken, symbols)
 		if err != nil {
-			log.Printf("Error parsing trade request: %v", err)
+			log.Printf("Error parsing trade request with Openai: %v", err)
+			// send erreur with log to telegram
+			tgBot.sendMessage(fmt.Sprintf("❌ Error parsing trade request: %v", err), 0)
 			return nil, nil, err
 		}
+
 		tradeRequest.Volume = volume
 		tradeRequest = setTradeRequestEntryZone(tradeRequest)
 		if !tgBot.RedisClient.IsSymbolExist(tradeRequest.Symbol) {
 			log.Printf("Symbol %s is not allowed", tradeRequest.Symbol)
+			// send message
+			// Optional. Quoted part of the message to be replied to; 0-1024 characters after entities parsing. The quote must be an exact substring of the message to be replied to, including bold, italic, underline, strikethrough, spoiler, and custom_emoji entities. The message will fail to send if the quote isn't found in the original message.
+			tgBot.sendMessage("❌ Symbol is not allowed", 0)
 			return nil, nil, errors.New("symbol is not allowed")
 		}
 		strategy := tgBot.RedisClient.GetStrategy()
@@ -130,7 +155,15 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		// check if the same trade already exist
 		if tgBot.RedisClient.IsTradeKeyExist(tradeRequest.GenerateTradeRequestKey()) {
 			log.Printf("Trade already placed")
-			//niapeu xonam xawgama ray
+			// add the new message id if not already set
+			if tgBot.RedisClient.GetTradeFirstMessageId(int64(messageId)) == 0 {
+				// get the first message id
+				firstMessageId := tgBot.RedisClient.GetTradeKeyMessageId(tradeRequest.GenerateTradeRequestKey())
+				// set first message id for current message
+				tgBot.RedisClient.SetFirstTradeMessageId(firstMessageId, int64(messageId))
+			}
+			// send message
+			tgBot.sendMessage("❌ Trade already exist", 0)
 			return nil, nil, errors.New("trade already exist")
 		}
 
@@ -138,6 +171,8 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		log.Printf("TradeRequest struct: %+v\n", tradeRequest)
 		if errTrade != nil {
 			log.Printf("Error validating trade request: %v", errTrade)
+			// send erreur with log to telegram
+			tgBot.sendMessage(fmt.Sprintf("❌ Error validating trade request: %v", errTrade), 0)
 			return nil, nil, errTrade
 		}
 
@@ -196,9 +231,10 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 			metaApiRequest.Volume = &volume
 			// concat channel id and channel initial
 			chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
-			clientId := fmt.Sprintf("%s_%s_%s", chanelInitials, strconv.Itoa(message.ID), "TP"+strconv.Itoa(i+1))
+			clientId := fmt.Sprintf("%s_%s_%s", chanelInitials, strconv.Itoa(int(messageId)), "TP"+strconv.Itoa(i+1))
 			// channelID_messageId_TP1
 			metaApiRequest.ClientID = &clientId
+
 			// try at least three time
 			for j := 0; j < 3; j++ {
 				trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, metaApiAccountId, metaApiToken)
@@ -307,12 +343,16 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		}
 		if tradeSuccess {
 			// save trade request
-			tradeRequest.MessageId = &message.ID
+			tradeRequest.MessageId = &messageId
 			tradeRbytes, errJ := json.Marshal(tradeRequest)
 			if errJ == nil {
-				tgBot.RedisClient.SetTradeRequest(int64(message.ID), tradeRbytes)
+				tgBot.RedisClient.SetTradeRequest(int64(messageId), tradeRbytes)
 				// add trade key
-				tgBot.RedisClient.AddTradeKey(tradeRequest.GenerateTradeRequestKey())
+				tradeKey := tradeRequest.GenerateTradeRequestKey()
+				tgBot.RedisClient.AddTradeKey(tradeKey)
+				// set trade key message id
+				tgBot.RedisClient.SetTradeKeyMessageId(tradeKey, int64(messageId))
+
 				return tradeRequest, &tradeResponses, nil
 			}
 		} else {
@@ -320,9 +360,11 @@ func (tgBot *TgBot) HandleTradeRequest(ctx context.Context, message *tg.Message,
 		}
 	} else {
 		//here its an update of a given order so we need to fetch the order and update it
-		tradeUpdate, err := GptParseUpdateMessage(message.Message, openaiApiKey)
+		tradeUpdate, err := GptParseUpdateMessage(message, openaiApiKey)
 		if err != nil {
 			log.Printf("Error parsing trade request: %v", err)
+			// send erreur with log to telegram
+			tgBot.sendMessage(fmt.Sprintf("❌ Error parsing trade request: %v", err), 0)
 			return nil, nil, err
 		}
 		positions, err := currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)

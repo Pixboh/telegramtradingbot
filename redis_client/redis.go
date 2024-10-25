@@ -124,7 +124,7 @@ func (rdClient *RedisClient) SetTradingVolume(volume float64) {
 func (rdClient *RedisClient) GetTradingVolume() float64 {
 	volume := rdClient.Rdb.Get(context.Background(), "trading_volume")
 	if volume.Err() != nil {
-		return 0.001
+		return 0.01
 	}
 	volumeFloat, _ := strconv.ParseFloat(volume.Val(), 64)
 	return volumeFloat
@@ -149,7 +149,12 @@ func (rdClient *RedisClient) SetTradeRequest(messageId int64, tradeRequestByte [
 
 // get trade request by message id
 func (rdClient *RedisClient) GetTradeRequest(messageId int64) []byte {
-	tradeRequest := rdClient.Rdb.HGet(context.Background(), "trade_request", strconv.FormatInt(messageId, 10))
+	// get first message id of the trade
+	tradeMessageId := rdClient.GetTradeFirstMessageId(messageId)
+	if tradeMessageId == 0 {
+		tradeMessageId = messageId
+	}
+	tradeRequest := rdClient.Rdb.HGet(context.Background(), "trade_request", strconv.FormatInt(tradeMessageId, 10))
 	if tradeRequest.Err() != nil {
 		return nil
 	}
@@ -259,6 +264,30 @@ func (rdClient *RedisClient) GetTradeKeys() []string {
 	return tradeKeys.Val()
 }
 
+// link trade key to the id of the telegram message
+func (rdClient *RedisClient) SetTradeKeyMessageId(tradeKey string, messageId int64) {
+	rdClient.Rdb.HSet(context.Background(), "trade_key_message_id", tradeKey, strconv.FormatInt(messageId, 10))
+}
+
+// get message id by trade key
+func (rdClient *RedisClient) GetTradeKeyMessageId(tradeKey string) int64 {
+	messageId := rdClient.Rdb.HGet(context.Background(), "trade_key_message_id", tradeKey)
+	if messageId.Err() != nil {
+		return 0
+	}
+	messageIdInt, _ := strconv.ParseInt(messageId.Val(), 10, 64)
+	return messageIdInt
+}
+
+// get trade key by message id
+func (rdClient *RedisClient) GetTradeKeyByMessageId(messageId int64) string {
+	tradeKey := rdClient.Rdb.HGet(context.Background(), "trade_key_message_id", strconv.FormatInt(messageId, 10))
+	if tradeKey.Err() != nil {
+		return ""
+	}
+	return tradeKey.Val()
+}
+
 // is trade key
 func (rdClient *RedisClient) IsTradeKeyExist(tradeKey string) bool {
 	tradeKeys := rdClient.Rdb.SMembers(context.Background(), "trade_keys")
@@ -302,4 +331,48 @@ func (r *RedisClient) GetRiskPercentage() float64 {
 	}
 	riskFloat, _ := strconv.ParseFloat(risk.Val(), 64)
 	return riskFloat
+}
+
+// we can have the same trade in multiple messages. We need to store the first message id of the trade and then store the following message ids on the same trade
+// we dont have trade id so we use the first message id as key
+func (rdClient *RedisClient) SetFirstTradeMessageId(firstMessageId int64, messageId int64) {
+	rdClient.Rdb.HSet(context.Background(), "trade_message_id", strconv.FormatInt(messageId, 10), strconv.FormatInt(firstMessageId, 10))
+}
+
+// given a message : if it is the first message of a trade, return the message id of the first message else if it is a follow up message return the first message id
+func (rdClient *RedisClient) GetTradeFirstMessageId(messageId int64) int64 {
+	firstMessageId := rdClient.Rdb.HGet(context.Background(), "trade_message_id", strconv.FormatInt(messageId, 10))
+	if firstMessageId.Err() != nil {
+		return 0
+	}
+	firstMessageIdInt, _ := strconv.ParseInt(firstMessageId.Val(), 10, 64)
+	return firstMessageIdInt
+}
+
+// is message id a first message of a trade
+func (rdClient *RedisClient) IsTradeMessageIdExist(messageId int64) bool {
+	tradeKeys := rdClient.Rdb.HKeys(context.Background(), "trade_message_id")
+	if tradeKeys.Err() != nil {
+		return false
+	}
+	for _, tk := range tradeKeys.Val() {
+		if tk == strconv.FormatInt(messageId, 10) {
+			return true
+		}
+	}
+	return false
+}
+
+// is message id a follow up message of a trade
+func (rdClient *RedisClient) IsTradeMessageIdFollowUpExist(messageId int64) bool {
+	tradeKeys := rdClient.Rdb.HVals(context.Background(), "trade_message_id")
+	if tradeKeys.Err() != nil {
+		return false
+	}
+	for _, tk := range tradeKeys.Val() {
+		if tk == strconv.FormatInt(messageId, 10) {
+			return true
+		}
+	}
+	return false
 }

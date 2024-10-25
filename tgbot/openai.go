@@ -472,7 +472,50 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				},
 				{
 					Role:    "user",
+					Content: "Exemple: ⚠️ SL* 148",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "MODIFY_STOPLOSS",
+  "value" : 148
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple: ⚠️ Decaler le stop loss à  67500",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "MODIFY_STOPLOSS",
+  "value" : 67500
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple: ⚠️ Deplacer le SL à  149",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "MODIFY_STOPLOSS",
+  "value" : 149
+}`,
+				},
+				{
+					Role:    "user",
 					Content: "Exemple: ⚠️ Securisez le trade",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "SL_TO_ENTRY_PRICE"
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Exemple: +30pips securisez",
 				},
 				{
 					Role: "assistant",

@@ -3,11 +3,8 @@ package tgbot
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/PaulSonOfLars/gotgbot/v2"
 	"github.com/go-faster/errors"
-	"github.com/gotd/td/bin"
-	"github.com/gotd/td/tdp"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/updates"
@@ -17,11 +14,10 @@ import (
 	"go.uber.org/zap/zapcore"
 	"os"
 	"os/signal"
-	"reflect"
+	"strconv"
 	"tdlib/authmanager"
 	"tdlib/config"
 	"tdlib/redis_client"
-	"time"
 )
 
 type TgBot struct {
@@ -68,18 +64,45 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 		Logger:  log.Named("gaps"),
 	})
 
-	// Authentication flow handles authentication process, like prompting for code and 2FA password.
-	//flow := auth.NewFlow(authmanager.TerminalPrompt{PhoneNumber: "+221771307579"}, auth.SendCodeOptions{})
-	flow := auth.NewFlow(authmanager.TerminalPrompt{PhoneNumber: tgBot.AppConfig.PhoneNumber}, auth.SendCodeOptions{})
+	// listen to redis for new trading signals
+	pubSub := tgBot.RedisClient.Rdb.Subscribe(context.Background(), "trading_signals")
+	_, errSubscribing := pubSub.Receive(context.Background())
+	if errSubscribing != nil {
+		log.Error("Error subscribing to trading signals", zap.Error(errSubscribing))
+		return errSubscribing
+	}
 
-	// Initializing client from environment.
-	// Available environment variables:
-	// 	APP_ID:         app_id of Telegram app.
-	// 	APP_HASH:       app_hash of Telegram app.
-	// 	SESSION_FILE:   path to session file
-	// 	SESSION_DIR:    path to session directory, if SESSION_FILE is not set
-	//
-	//remove current session first
+	// Ensure we unsubscribe when done
+	defer pubSub.Close()
+	go func() {
+		ch := pubSub.Channel()
+		for msg := range ch {
+			log.Info("Received message", zap.String("channel", msg.Channel), zap.String("payload", msg.Payload))
+			var tradeRequest HandleRequestInput
+			err := json.Unmarshal([]byte(msg.Payload), &tradeRequest)
+			if err != nil {
+				log.Error("Error unmarshalling trade request", zap.Error(err))
+				continue
+			}
+			// get chat id
+			chatId := tgBot.RedisClient.GetChatId()
+			// send message to chat
+			headerMessage := "Trading signal from " + tradeRequest.ChannelName
+			botM := headerMessage + "\n" + tradeRequest.Message
+			_, errSend := tgBot.Bot.SendMessage(chatId, botM, nil)
+			if errSend != nil {
+				log.Error("Error sending message to chat", zap.Error(errSend))
+				continue
+			}
+			// handle request
+			_, _, err = tgBot.HandleTradeRequest(tradeRequest)
+			if err != nil {
+				log.Error("Error handling trade request", zap.Error(err))
+			}
+		}
+	}()
+
+	flow := auth.NewFlow(authmanager.TerminalPrompt{PhoneNumber: tgBot.AppConfig.PhoneNumber}, auth.SendCodeOptions{})
 
 	client, err := telegram.ClientFromEnvironment(telegram.Options{
 		Logger:        log,
@@ -92,15 +115,11 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	tgBot.tdClient = client
 	go func() {
 		tgBot.LaunchBorisBot(client)
 	}()
 
-	// check open api
-	defaultVolume := tgBot.RedisClient.GetTradingVolume()
-	openaiApiKey := tgBot.AppConfig.OpenAiToken
-	metaApiToken := tgBot.AppConfig.MetaApiToken
-	metaApiAccountId := tgBot.AppConfig.MetaApiAccountID
 	//clientOpenApi := openai.NewClient(openaiApiKey)
 	// Setup message update handlers.
 	d.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewChannelMessage) error {
@@ -160,17 +179,24 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 			log.Info("Bot is off")
 			return nil
 		}
-		_, _, err := tgBot.HandleTradeRequest(ctx, m,
-			openaiApiKey, metaApiAccountId, metaApiToken, defaultVolume, replyTradeRequest, messageChannel)
+		input := HandleRequestInput{
+			MessageId:         m.ID,
+			Message:           m.Message,
+			ParentRequest:     replyTradeRequest,
+			ChannelID:         messageChannel.ID,
+			ChannelName:       messageChannel.Title,
+			ChannelAccessHash: messageChannel.AccessHash,
+		}
+		err := tgBot.PushHandleRequestInputToRedis(&input)
 		if err != nil {
-			log.Error("Error handling trade request", zap.Error(err))
+			log.Error("Error pushing handle request input to redis", zap.Error(err))
 			return err
 		}
 
 		return nil
 	})
 
-	return client.Run(ctx, func(ctx context.Context) error {
+	errClientTg := client.Run(ctx, func(ctx context.Context) error {
 		// Perform auth if no session is available.
 		if err := client.Auth().IfNecessary(ctx, flow); err != nil {
 			return errors.Wrap(err, "auth")
@@ -187,56 +213,29 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 			},
 		})
 	})
+	if errClientTg != nil {
+		log.Error("Error running telegram client", zap.Error(errClientTg))
+		return errClientTg
+	}
+
+	// listen to redis for new trading signals
+	return nil
+
 }
 
-func prettyMiddleware() telegram.MiddlewareFunc {
-	return func(next tg.Invoker) telegram.InvokeFunc {
-		return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
-			fmt.Println("→", formatObject(input))
-			start := time.Now()
-			if err := next.Invoke(ctx, input, output); err != nil {
-				fmt.Println("←", err)
-				return err
-			}
-
-			fmt.Printf("← (%s) %s\n", time.Since(start).Round(time.Millisecond), formatObject(output))
-
-			return nil
-		}
+func (tgBot *TgBot) PushHandleRequestInputToRedis(input *HandleRequestInput) error {
+	jsonL, _ := json.Marshal(input)
+	nx := tgBot.RedisClient.Rdb.HSetNX(context.Background(), "trading_signals", strconv.Itoa(int(input.MessageId)), jsonL)
+	if nx.Err() != nil {
+		return nx.Err()
 	}
-}
-
-func formatObject(input interface{}) string {
-	o, ok := input.(tdp.Object)
-	if !ok {
-		// Handle tg.*Box values.
-		rv := reflect.Indirect(reflect.ValueOf(input))
-		for i := 0; i < rv.NumField(); i++ {
-			if v, ok := rv.Field(i).Interface().(tdp.Object); ok {
-				return formatObject(v)
-			}
-		}
-
-		return fmt.Sprintf("%T (not object)", input)
+	// publish to channel
+	pub := tgBot.RedisClient.Rdb.Publish(context.Background(), "trading_signals", jsonL)
+	if pub.Err() != nil {
+		// print
+		println("Error publishing to trading signals")
+		return pub.Err()
 	}
-	return tdp.Format(o)
-}
-
-func IsPriceInEntryZone(price float64, entryMin, entryMax float64) bool {
-	// add a little margin base on the difference between max and min value to tolerate trading updates
-	diff := entryMax - entryMin
-	marginToTolerate := diff * 0.5
-	if entryMin > 0 {
-		if entryMax > 0 {
-			if price < entryMin-marginToTolerate || price > entryMax+marginToTolerate {
-				return false
-			}
-		} else {
-			if price < entryMin-marginToTolerate {
-				return false
-			}
-		}
-	}
-	return true
+	return nil
 
 }
