@@ -588,6 +588,16 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				},
 				{
 					Role:    "user",
+					Content: "Exemple: 🤴 CHRIS GOLD FATHER 💰\nSee how accurate my mapping is? Even when it goes outside my zone, I don’t panic or tell you to close the entry I hold until it hits TP1 guys😎🔥\n\nxauusd buy : 66pips ($1,825usd ) \n\nThis is how you execute a true high-quality trade setup, aiming for exactly 1% daily not more, not less☝🏻\n\nLessgo secure highest entry now and only hold 1/2 lowest with breakeven📢  ",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "TP1_HIT"
+}`,
+				},
+				{
+					Role:    "user",
 					Content: message,
 				},
 			},

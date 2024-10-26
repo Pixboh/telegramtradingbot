@@ -10,6 +10,7 @@ require (
 	github.com/go-faster/errors v0.7.1
 	github.com/gotd/td v0.99.2
 	github.com/redis/go-redis/v9 v9.6.1
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.31.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/term v0.25.0

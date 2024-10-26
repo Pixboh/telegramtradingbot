@@ -10,6 +10,7 @@ import (
 	"github.com/gotd/td/telegram/updates"
 	updhook "github.com/gotd/td/telegram/updates/hook"
 	"github.com/gotd/td/tg"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"os"
@@ -21,17 +22,18 @@ import (
 )
 
 type TgBot struct {
-	terminalAuth *authmanager.TerminalPrompt
-	RedisClient  *redis_client.RedisClient
-	AppConfig    *config.AppConfig
-	tdClient     *telegram.Client
-	Bot          *gotgbot.Bot
+	terminalAuth     *authmanager.TerminalPrompt
+	RedisClient      *redis_client.RedisClient
+	AppConfig        *config.AppConfig
+	tdClient         *telegram.Client
+	Bot              *gotgbot.Bot
+	CurrentPositions map[string]MetaApiPosition
 }
 
 func NewTgBot(appConfig config.AppConfig, redisClient *redis_client.RedisClient, terminalAuth *authmanager.TerminalPrompt) *TgBot {
 	//botToken := "8138746202:AAGoUErnWQHgPem_avFGfheP48B8ltkF9Ns"
 	botToken := appConfig.BotToken
-	// Create bot from environment value.
+	//Create bot from environment value.
 	b, err := gotgbot.NewBot(botToken, nil)
 	if err != nil {
 		panic("failed to create new bot: " + err.Error())
@@ -41,12 +43,18 @@ func NewTgBot(appConfig config.AppConfig, redisClient *redis_client.RedisClient,
 		RedisClient:  redis_client.NewRedisClient(),
 		AppConfig:    &appConfig,
 		Bot:          b,
+		// stock list of current positions MetaApiPosition
+		CurrentPositions: make(map[string]MetaApiPosition),
 	}
 }
 
 func (tgBot *TgBot) Start() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	// run cron
+	c := cron.New()
+	c.AddFunc("@every 1m", tgBot.checkCurrentPositions) // Adapter le délai
+	c.Start()
 	if err := tgBot.run(ctx); err != nil {
 		panic(err)
 	}

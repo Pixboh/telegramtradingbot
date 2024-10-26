@@ -367,7 +367,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			tgBot.sendMessage(fmt.Sprintf("❌ Error parsing trade request: %v", err), 0)
 			return nil, nil, err
 		}
-		positions, err := currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+		positions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -380,9 +380,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				// manual close tp1
 				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 1)
 				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
-					customPositions := []*MetaApiPosition{positionTP1}
+					customPositions := []MetaApiPosition{*positionTP1}
 					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
-					positions, err = currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+					positions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -390,7 +390,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				}
 
 			}
-			tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 1)
+			tgBot.doBreakeven(currentMessagePositions, 1)
 		} else if tradeUpdate.UpdateType == "TP2_HIT" {
 			// do breakeven
 			//	if tp1 hit modify SL to tp 1 value on all other TP
@@ -398,9 +398,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				// manual close tp1
 				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 2)
 				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
-					customPositions := []*MetaApiPosition{positionTP1}
+					customPositions := []MetaApiPosition{*positionTP1}
 					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
-					positions, err = currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+					positions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -408,7 +408,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				}
 
 			}
-			tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 2)
+			tgBot.doBreakeven(currentMessagePositions, 2)
 		} else if tradeUpdate.UpdateType == "TP3_HIT" {
 			// do breakeven
 			//	if tp1 hit modify SL to tp 1 value on all other TP
@@ -416,9 +416,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				// manual close tp1
 				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 3)
 				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
-					customPositions := []*MetaApiPosition{positionTP1}
+					customPositions := []MetaApiPosition{*positionTP1}
 					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
-					positions, err = currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+					positions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -426,7 +426,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				}
 
 			}
-			tgBot.doBreakeven(parentRequest, &channel, currentMessagePositions, *parentRequest.MessageId, 3)
+			tgBot.doBreakeven(currentMessagePositions, 3)
 
 		} else if tradeUpdate.UpdateType == "CLOSE_TRADE" {
 			// close all positions
@@ -456,17 +456,17 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 	return nil, nil, errors.New("trade not placed")
 }
 
-func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []*MetaApiPosition, id string, token string) error {
+func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []MetaApiPosition, id string, token string) error {
 	// get entry price base on positions
 	tradeSuccess := false
 	// generate a telegram response for the bot
 	botMessage := fmt.Sprintf("✅ SL to Entry Price 🎉")
 	for _, position := range positions {
-		//
+		newStopLoss := calculateNewStopLossPriceForBreakeven(position.OpenPrice, position.Type)
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_MODIFY",
-			StopLoss:   &position.OpenPrice,
+			StopLoss:   &newStopLoss,
 			PositionID: &position.ID,
 			TakeProfit: &position.TakeProfit,
 		}
@@ -533,7 +533,7 @@ func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []*MetaApi
 }
 
 // function to do breakeven when tp are hit on a trade
-func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel, currentMessagePositions []*MetaApiPosition, messageId int, tpHitNumber int) error {
+func (tgBot *TgBot) doBreakeven(currentMessagePositions []MetaApiPosition, tpHitNumber int) error {
 	// get entry price base on positions
 	entryPrice := 0.0
 
@@ -545,11 +545,11 @@ func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel,
 		// safe
 		entryPrice = position.OpenPrice
 		// add a litle margin
-		entryPrice = entryPrice + 0.04
+		newStopLoss := calculateNewStopLossPriceForBreakeven(position.OpenPrice, position.Type)
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_MODIFY",
-			StopLoss:   &entryPrice,
+			StopLoss:   &newStopLoss,
 			PositionID: &position.ID,
 			TakeProfit: &position.TakeProfit,
 		}
@@ -632,7 +632,9 @@ func (tgBot *TgBot) doBreakeven(tradeRequest *TradeRequest, channel *tg.Channel,
 	return nil
 }
 
-func (tgBot *TgBot) doModifyStopLoss(request *TradeRequest, update *TradeUpdateRequest, positions []*MetaApiPosition, id string, token string) error {
+// automatic breakeven triggered by cron job
+
+func (tgBot *TgBot) doModifyStopLoss(request *TradeRequest, update *TradeUpdateRequest, positions []MetaApiPosition, id string, token string) error {
 	// get entry price base on positions
 	tradeSuccess := false
 	// generate a telegram response for the bot
@@ -720,7 +722,7 @@ func (tgBot *TgBot) doModifyStopLoss(request *TradeRequest, update *TradeUpdateR
 }
 
 // close all positions and implement the same logic as breakeven
-func (tgBot *TgBot) doCloseTrade(request *TradeRequest, positions []*MetaApiPosition, id string, token string) error {
+func (tgBot *TgBot) doCloseTrade(request *TradeRequest, positions []MetaApiPosition, id string, token string) error {
 	// get entry price base on positions
 	entryPrice := 0.0
 	tradeSuccess := false
@@ -893,7 +895,7 @@ func validateTradeValue(r *TradeRequest, strategy string) error {
 
 }
 
-func currentUserPositions(endpoint string, metaApiAccountId, metaApiToken string) ([]MetaApiPosition, error) {
+func (tgBot *TgBot) currentUserPositions(endpoint string, metaApiAccountId, metaApiToken string) ([]MetaApiPosition, error) {
 	url := fmt.Sprintf("%s/users/current/accounts/%s/positions", endpoint, metaApiAccountId)
 
 	req, _ := http.NewRequest("GET", url, nil)
@@ -941,9 +943,9 @@ func ExtractReplyToMessageId(input string) (int, error) {
 }
 
 // get position by messageID containing in the clientID field with. Example for clientId 6203_TP2_pending 6203 is the messageID
-func getPositionsByMessageId(positions []MetaApiPosition, messageID int) []*MetaApiPosition {
+func getPositionsByMessageId(positions []MetaApiPosition, messageID int) []MetaApiPosition {
 	// search for position wich clientID start with messageID
-	var result []*MetaApiPosition
+	var result []MetaApiPosition
 	for _, position := range positions {
 		if position.ClientID != "" {
 			// regex to check client id contain message
@@ -953,21 +955,21 @@ func getPositionsByMessageId(positions []MetaApiPosition, messageID int) []*Meta
 			// Example = TPA@564464_46456_TP2
 			re := regexp.MustCompile(`^[^@]+@\d+_` + strconv.Itoa(messageID) + `_TP\d+`)
 			if re.MatchString(position.ClientID) {
-				result = append(result, &position)
+				result = append(result, position)
 			}
 		}
 	}
 	return result
 }
 
-func getPositionByMessageIdAndTP(positions []*MetaApiPosition, messageID int, tpNumber int) *MetaApiPosition {
+func getPositionByMessageIdAndTP(positions []MetaApiPosition, messageID int, tpNumber int) *MetaApiPosition {
 	// search for position wich clientID start with messageID
 	for _, position := range positions {
 		if position.ClientID != "" {
 			// regex to check if clientId contain message id and tp number
 			re := regexp.MustCompile(`^[^@]+@\d+_` + strconv.Itoa(messageID) + `_TP` + strconv.Itoa(tpNumber))
 			if re.MatchString(position.ClientID) {
-				return position
+				return &position
 			}
 		}
 	}
@@ -1191,3 +1193,94 @@ ExecStart=/home/ubuntu/telegramtradingbot/main
 WantedBy=multi-user.target
 ~
 */
+
+func calculateNewStopLossPriceForBreakeven(entryPrice float64, actionType string) float64 {
+	margin := 0.05
+	pips := 0.0
+	// calculate new stop loss
+	newStopLoss := 0.0
+	if actionType == "POSITION_TYPE_BUY" {
+		newStopLoss = entryPrice + (pips + margin)
+	} else if actionType == "POSITION_TYPE_SELL" {
+		newStopLoss = entryPrice - (pips + margin)
+	}
+	return newStopLoss
+}
+
+// get default stop loss
+func getDefaultStopLoss(actionType string, entryPrice float64) float64 {
+	margin := 0.05
+	pips := 0.0
+	// calculate new stop loss
+	stopLoss := 0.0
+	if actionType == "POSITION_TYPE_BUY" {
+		stopLoss = entryPrice - (pips + margin)
+	} else if actionType == "POSITION_TYPE_SELL" {
+		stopLoss = entryPrice + (pips + margin)
+	}
+	return stopLoss
+}
+
+func (tgBot *TgBot) checkCurrentPositions() {
+	println("Checking current positions")
+	latestPositions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
+	if err != nil {
+		println("Error getting current user positions: ", err)
+	}
+	// check for tp2 without tp1 and breakeven not setted
+	for _, position := range latestPositions {
+		tpNumber := extractTPFromClientId(position.ClientID)
+		if tpNumber == 2 && isBreakevenSetted(&position) == false {
+			clientId := position.ClientID
+			// check if tp1 is containing
+			messageId := extractMessageIdFromClientId(clientId)
+			tp1Position := getPositionByMessageIdAndTP(latestPositions, messageId, 1)
+			if tp1Position == nil {
+				// trigger tp1_hit and breakeven
+				messagePositions := getPositionsByMessageId(latestPositions, messageId)
+				// trigger breakeven
+				// send message
+				if len(messagePositions) > 0 {
+					positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+					tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
+					tgBot.doBreakeven(messagePositions, 1)
+				}
+			}
+		}
+
+	}
+
+}
+
+func extractMessageIdFromClientId(id string) int {
+	// client id example : channelTitle@ChannelID_MessageID_TP2 :  TGR@2054755865_4609_TP3
+	re := regexp.MustCompile(`[^@]+@\d+_(\d+)_TP\d+`)
+	matches := re.FindStringSubmatch(id)
+	if len(matches) < 2 {
+		return 0
+	}
+	messageId, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
+	return messageId
+}
+
+// check if breakeven is setted for a position. it is set when stop is moved to entry price with a margin base on buy or sell
+func isBreakevenSetted(position *MetaApiPosition) bool {
+	if position.StopLoss == 0 {
+		return false
+	}
+	if position.Type == "POSITION_TYPE_BUY" {
+		// stop loss superior to entry price
+		if position.StopLoss >= position.OpenPrice {
+			return true
+		}
+	} else if position.Type == "POSITION_TYPE_SELL" {
+		// stop loss inferior to entry price
+		if position.StopLoss <= position.OpenPrice {
+			return true
+		}
+	}
+	return false
+}
