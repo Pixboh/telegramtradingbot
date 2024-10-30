@@ -219,7 +219,7 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 func (tgBot *TgBot) setStrategy(b *gotgbot.Bot, ctx *ext.Context, b2 bool) error {
 	// Create the inline keyboard buttons
 	// list of volumes
-	strategies := []string{"3TP", "TP1", "TP2", "TP3"}
+	strategies := []string{"3TP", "TP1", "TP2"}
 	// generate inlineKeyboard base on strategies
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
 	for _, strategy := range strategies {
@@ -732,6 +732,7 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		} else {
 			tgBot.RedisClient.AddSymbol(symbol)
 		}
+		tgBot.RedisClient.SetAllSymbols(false)
 		return tgBot.setSymbols(b, ctx, 0)
 	}
 
@@ -812,6 +813,7 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		} else {
 			tgBot.RedisClient.SetBreakevenEnabled(channelID, true)
 		}
+		tgBot.RedisClient.SetBreakevenEnabledForAll(false)
 
 		return tgBot.setChannelBreakeven(b, ctx, true)
 	}
