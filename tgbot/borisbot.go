@@ -42,7 +42,10 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("stop_trading", tgBot.stop))
 	dispatcher.AddHandler(handlers.NewCommand("add_working_channels", tgBot.addWorkingChannels))
 	dispatcher.AddHandler(handlers.NewCommand("set_volume", tgBot.setTradeVolumeCallback))
+	dispatcher.AddHandler(handlers.NewCommand("set_daily_profit_goal", tgBot.setDailyProfitGoalCallback))
 	dispatcher.AddHandler(handlers.NewCommand("set_symbols", tgBot.setSymbolsCallback))
+	// set channel breakeven
+	dispatcher.AddHandler(handlers.NewCommand("set_channel_breakeven", tgBot.setChannelBreakevenCallback))
 	dispatcher.AddHandler(handlers.NewCommand("set_strategy", tgBot.setStrategyCallback))
 	dispatcher.AddHandler(handlers.NewCommand("status", tgBot.GetBotStatus))
 	dispatcher.AddHandler(handlers.NewCommand("set_risk", tgBot.setRiskPercentageCallback))
@@ -64,6 +67,49 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	}
 	log.Printf("%s has been started...\n", tgBot.Bot.User.Username)
 
+	tgBot.Bot.SetMyCommands([]gotgbot.BotCommand{
+		{
+			Command:     "start_trading",
+			Description: "Start Auto Trading",
+		},
+		{
+			Command:     "stop_trading",
+			Description: "Stop Auto Trading",
+		},
+		{
+			Command:     "add_working_channels",
+			Description: "Add working channels",
+		},
+		{
+			Command:     "set_volume",
+			Description: "Set trading volume",
+		},
+		{
+			Command:     "set_daily_profit_goal",
+			Description: "Set daily profit goal",
+		},
+		{
+			Command:     "set_symbols",
+			Description: "Set Symbols",
+		},
+		{
+			Command:     "set_channel_breakeven",
+			Description: "Set channel breakeven",
+		},
+		{
+			Command:     "set_strategy",
+			Description: "Set strategy",
+		},
+		{
+			Command:     "status",
+			Description: "Bot status",
+		},
+		{
+			Command:     "set_risk",
+			Description: "Set risk percentage",
+		},
+	}, nil)
+
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
 }
@@ -73,6 +119,14 @@ func (tgBot *TgBot) setStrategyCallback(b *gotgbot.Bot, ctx *ext.Context) error 
 }
 func (tgBot *TgBot) setRiskPercentageCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 	return tgBot.setRiskPercentage(b, ctx, false)
+}
+
+func (tgBot *TgBot) setChannelBreakevenCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setChannelBreakeven(b, ctx, false)
+}
+
+func (tgBot *TgBot) setDailyProfitGoalCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setDailyProfitGoal(b, ctx, false)
 }
 
 func (tgBot *TgBot) setRiskPercentage(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
@@ -145,6 +199,14 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	text = text + "\nSymbols 💸: " + strings.Join(tgBot.RedisClient.GetSymbols(), "\n")
 	text = text + "\n-------------------------"
 
+	// daily profit goal
+	text = text + "\nDaily Profit Goal 💰: " + fmt.Sprintf("%.2f", tgBot.RedisClient.GetDailyProfitGoal())
+	text = text + "\n-------------------------"
+
+	// current profit reached
+	text = text + "\nCurrent Profit 💰: " + fmt.Sprintf("%.2f", tgBot.getTodayProfit())
+	text = text + "\n-------------------------"
+
 	ctx.EffectiveMessage.Reply(b, text, nil)
 	// channels
 	tgBot.paginateChannels(b, ctx, -1)
@@ -205,7 +267,7 @@ func (tgBot *TgBot) setSymbolsCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 
 // set symbols available for trading
 func (tgBot *TgBot) setSymbols(b *gotgbot.Bot, ctx *ext.Context, page int) error {
-	symbolsPerPage := 50
+	symbolsPerPage := 20
 	// Récupérer la liste des symboles depuis MetaTrader
 	symbols, errS := fetchAllSymbols(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 	if errS != nil {
@@ -224,7 +286,7 @@ func (tgBot *TgBot) setSymbols(b *gotgbot.Bot, ctx *ext.Context, page int) error
 	}
 
 	// Concaténer les symboles sélectionnés et non sélectionnés, les sélectionnés restant toujours en haut
-	_ = append(selectedSymbols, unselectedSymbols...)
+	allSymbols := append(selectedSymbols, unselectedSymbols...)
 
 	// Calculer le nombre total de pages
 	totalPages := (len(unselectedSymbols) + len(selectedSymbols) + symbolsPerPage - 1) / symbolsPerPage
@@ -238,13 +300,16 @@ func (tgBot *TgBot) setSymbols(b *gotgbot.Bot, ctx *ext.Context, page int) error
 	// Déterminer l'intervalle pour paginer les symboles non sélectionnés
 	start := page * symbolsPerPage
 	end := start + symbolsPerPage
-	if end > len(unselectedSymbols) {
-		end = len(unselectedSymbols)
+	currentSymbols := []string{}
+	if len(allSymbols) > 0 {
+		if end > len(allSymbols) {
+			end = len(allSymbols)
+		}
+		currentSymbols = allSymbols[start:end]
 	}
-	currentSymbols := unselectedSymbols[start:end]
 
 	// Créer la liste complète des symboles (sélectionnés toujours en haut)
-	displaySymbols := append(selectedSymbols, currentSymbols...)
+	displaySymbols := currentSymbols
 
 	// Créer le clavier inline avec les boutons pour chaque symbole
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
@@ -317,6 +382,81 @@ func (tgBot *TgBot) setSymbols(b *gotgbot.Bot, ctx *ext.Context, page int) error
 	return nil
 }
 
+// display list of selected channels and allow  user to enable or disable breakeven for each channel
+func (tgBot *TgBot) setChannelBreakeven(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// get all working channelIds
+	channelIds := tgBot.RedisClient.GetChannels()
+	// load telegram channelIds
+	inputChannles := make([]tg.InputChannelClass, 0)
+	for _, channelId := range channelIds {
+		inputChannles = append(inputChannles, &tg.InputChannel{
+			ChannelID:  channelId,
+			AccessHash: 0,
+		})
+	}
+	telegramChannelsByIds, errTg := tgBot.tdClient.API().ChannelsGetChannels(context.Background(), inputChannles)
+	if errTg != nil {
+		return fmt.Errorf("failed to get channels: %w", errTg)
+	}
+	// create inline keyboard
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	// add allow for all channels button
+	textAuthorize := "Allow All"
+	if tgBot.RedisClient.IsBreakevenEnabledForAll() {
+		textAuthorize = textAuthorize + " ✅"
+	}
+	inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+		{
+			Text:         textAuthorize,
+			CallbackData: fmt.Sprintf("breakeven_authorize_all"),
+		},
+	})
+	switch v := telegramChannelsByIds.(type) {
+	case *tg.MessagesChats:
+		{
+			for _, channelItem := range v.Chats {
+				if channel, ok := channelItem.(*tg.Channel); ok {
+					text := channel.Title
+					if tgBot.RedisClient.IsBreakevenEnabled(int(channel.ID)) {
+						text = text + " ✅"
+					}
+					inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+						{
+							Text:         text,
+							CallbackData: fmt.Sprintf("channel_breakeven_%s", strconv.Itoa(int(channel.ID))),
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the channels you want to enable breakeven:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the channels you want to enable breakeven:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+	return nil
+}
+
 // set symbols available for trading
 func (tgBot *TgBot) setTradeVolumeCallback(b *gotgbot.Bot,
 	ctx *ext.Context) error {
@@ -360,6 +500,53 @@ func (tgBot *TgBot) setTradeVolume(b *gotgbot.Bot, ctx *ext.Context, update bool
 		}
 	} else {
 		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the trade volume:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (tgBot *TgBot) setDailyProfitGoal(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// Create the inline keyboard buttons
+	// list of volumes
+	profitGoals := []float64{50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000}
+	// generate inlineKeyboard base on volumes
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	for _, profitGoal := range profitGoals {
+		// current volule
+		currentProfitGoal := tgBot.RedisClient.GetDailyProfitGoal()
+		// limit to 2
+		text := fmt.Sprintf("%.2f", profitGoal)
+		if currentProfitGoal == profitGoal {
+			text = text + " ✅"
+		}
+		inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("profit_goal_%f", profitGoal),
+			},
+		})
+	}
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the daily profit goal:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the daily profit goal:"), &gotgbot.EditMessageTextOpts{
 			ParseMode:   "HTML",
 			ReplyMarkup: replyMarkup,
 		})
@@ -593,6 +780,55 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		tgBot.RedisClient.SetStrategy(strategy)
 		return tgBot.setStrategy(b, ctx, true)
 	}
+
+	// breakeven
+	if strings.HasPrefix(data, "breakeven_authorize_all") {
+		if tgBot.RedisClient.IsBreakevenEnabledForAll() {
+			tgBot.RedisClient.SetBreakevenEnabledForAll(false)
+		} else {
+			tgBot.RedisClient.SetBreakevenEnabledForAll(true)
+		}
+		return tgBot.setChannelBreakeven(b, ctx, true)
+	}
+	if strings.HasPrefix(data, "channel_breakeven_") {
+		channelIDStr := strings.TrimPrefix(data, "channel_breakeven_")
+		channelID, err := strconv.Atoi(channelIDStr)
+		if err != nil {
+			return fmt.Errorf("invalid channel ID")
+		}
+
+		// Ajouter le channel sélectionné à Redis ou autre
+
+		if tgBot.RedisClient.IsBreakevenEnabled(channelID) {
+			tgBot.RedisClient.SetBreakevenEnabled(channelID, false)
+		} else {
+			tgBot.RedisClient.SetBreakevenEnabled(channelID, true)
+		}
+
+		return tgBot.setChannelBreakeven(b, ctx, true)
+	}
+
+	if strings.HasPrefix(data, "profit_goal_") {
+		profitGoalStr := strings.TrimPrefix(data, "profit_goal_")
+		profitGoal, err := strconv.ParseFloat(profitGoalStr, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse profit goal: %w", err)
+		}
+
+		// Stocker le pourcentage de risque dans Redis
+		tgBot.RedisClient.SetDailyProfitGoal(profitGoal)
+
+		// Répondre à l'utilisateur
+		_, err = ctx.CallbackQuery.Answer(b, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Daily profit goal updated successfully!",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to answer callback query: %w", err)
+		}
+
+		// Mettre à jour l'affichage
+		return tgBot.setDailyProfitGoal(b, ctx, true)
+	}
 	switch ctx.CallbackQuery.Data {
 	case "start_trading":
 		// Add your logic to start trading
@@ -609,6 +845,8 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		return tgBot.paginateChannels(b, ctx, 0)
 	case "set_volume":
 		return tgBot.setTradeVolume(b, ctx, false)
+	case "set_daily_profit_goal":
+		return tgBot.setDailyProfitGoal(b, ctx, false)
 	case "authorize_all_symb":
 		{
 			if tgBot.RedisClient.GetAllSymbols() {

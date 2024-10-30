@@ -131,6 +131,12 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 	message := input.Message
 	parentRequest := input.ParentRequest
 	if parentRequest == nil {
+		// check if reached daily profit
+		if tgBot.reachedProfitGoal() {
+			log.Printf("Reached daily profit goal")
+			tgBot.sendMessage("❌ Daily profit goal reached", 0)
+			return nil, nil, errors.New("daily profit goal reached")
+		}
 
 		tradeRequest, err := tgBot.GptParseNewMessage(input.Message, tgBot.AppConfig.OpenAiToken, symbols)
 		if err != nil {
@@ -381,7 +387,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 1)
 				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
 					customPositions := []MetaApiPosition{*positionTP1}
-					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
+					_ = tgBot.doCloseTrade(customPositions)
 					positions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 					if err != nil {
 						return nil, nil, err
@@ -399,7 +405,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 2)
 				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
 					customPositions := []MetaApiPosition{*positionTP1}
-					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
+					_ = tgBot.doCloseTrade(customPositions)
 					positions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 					if err != nil {
 						return nil, nil, err
@@ -417,7 +423,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				positionTP1 := getPositionByMessageIdAndTP(currentMessagePositions, *parentRequest.MessageId, 3)
 				if positionTP1 != nil && positionTP1.TakeProfit == 0 {
 					customPositions := []MetaApiPosition{*positionTP1}
-					_ = tgBot.doCloseTrade(parentRequest, customPositions, metaApiAccountId, metaApiToken)
+					_ = tgBot.doCloseTrade(customPositions)
 					positions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 					if err != nil {
 						return nil, nil, err
@@ -430,7 +436,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 
 		} else if tradeUpdate.UpdateType == "CLOSE_TRADE" {
 			// close all positions
-			errClodeTrade := tgBot.doCloseTrade(parentRequest, currentMessagePositions, metaApiAccountId, metaApiToken)
+			errClodeTrade := tgBot.doCloseTrade(currentMessagePositions)
 			if errClodeTrade != nil {
 
 			}
@@ -443,7 +449,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 
 		} else if tradeUpdate.UpdateType == "SL_TO_ENTRY_PRICE" {
 			// modify stop loss to the value given
-			errSlToEntryPrice := tgBot.doSlToEntryPrice(parentRequest, currentMessagePositions, metaApiAccountId, metaApiToken)
+			errSlToEntryPrice := tgBot.doSlToEntryPrice(currentMessagePositions)
 			if errSlToEntryPrice != nil {
 
 			}
@@ -456,7 +462,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 	return nil, nil, errors.New("trade not placed")
 }
 
-func (tgBot *TgBot) doSlToEntryPrice(request *TradeRequest, positions []MetaApiPosition, id string, token string) error {
+func (tgBot *TgBot) doSlToEntryPrice(positions []MetaApiPosition) error {
 	// get entry price base on positions
 	tradeSuccess := false
 	// generate a telegram response for the bot
@@ -722,7 +728,7 @@ func (tgBot *TgBot) doModifyStopLoss(request *TradeRequest, update *TradeUpdateR
 }
 
 // close all positions and implement the same logic as breakeven
-func (tgBot *TgBot) doCloseTrade(request *TradeRequest, positions []MetaApiPosition, id string, token string) error {
+func (tgBot *TgBot) doCloseTrade(positions []MetaApiPosition) error {
 	// get entry price base on positions
 	entryPrice := 0.0
 	tradeSuccess := false
@@ -997,7 +1003,9 @@ type MetaApiPosition struct {
 	Symbol                      string  `json:"symbol,omitempty"`
 	Magic                       int     `json:"magic,omitempty"`
 	Time                        string  `json:"time,omitempty"`
+	DoneTime                    *string `json:"doneTime,omitempty"`
 	BrokerTime                  string  `json:"brokerTime,omitempty"`
+	DoneBrokerTime              *string `json:"doneBrokerTime,omitempty"`
 	UpdateTime                  string  `json:"updateTime,omitempty"`
 	OpenPrice                   float64 `json:"openPrice,omitempty"`
 	Volume                      float64 `json:"volume,omitempty"`
@@ -1019,6 +1027,7 @@ type MetaApiPosition struct {
 	CurrentPrice                float64 `json:"currentPrice,omitempty"`
 	CurrentTickValue            float64 `json:"currentTickValue,omitempty"`
 	UpdateSequenceNumber        float64 `json:"updateSequenceNumber,omitempty"`
+	State                       string  `json:"state,omitempty"`
 }
 
 type MetaApiTradeRequest struct {
@@ -1195,7 +1204,7 @@ WantedBy=multi-user.target
 */
 
 func calculateNewStopLossPriceForBreakeven(entryPrice float64, actionType string) float64 {
-	margin := 0.05
+	margin := 0.1
 	pips := 0.0
 	// calculate new stop loss
 	newStopLoss := 0.0
@@ -1235,6 +1244,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 			// check if tp1 is containing
 			messageId := extractMessageIdFromClientId(clientId)
 			tp1Position := getPositionByMessageIdAndTP(latestPositions, messageId, 1)
+			channelID := extractChannelIDFromClientId(clientId)
 			if tp1Position == nil {
 				// trigger tp1_hit and breakeven
 				messagePositions := getPositionsByMessageId(latestPositions, messageId)
@@ -1242,14 +1252,240 @@ func (tgBot *TgBot) checkCurrentPositions() {
 				// send message
 				if len(messagePositions) > 0 {
 					positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
-					tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
-					tgBot.doBreakeven(messagePositions, 1)
+					// check if breakeven is setted for the channel on redis
+					if tgBot.RedisClient.IsBreakevenEnabled(channelID) {
+						tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
+						tgBot.doBreakeven(messagePositions, 1)
+					}
 				}
 			}
 		}
 
 	}
 
+	// if profit goal is not reached
+	// check if the bot reached the objective amount profit
+	// get amount from redis
+	profitGoal := tgBot.RedisClient.GetDailyProfitGoal()
+	if profitGoal > 0 {
+		latestPositions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
+		if err != nil {
+			println("Error getting current user positions: ", err)
+		}
+		// get today positiions from metaapi
+		todayPositions, errP := tgBot.getTodayPositions()
+		if errP != nil {
+			println("Error getting today positions: ", errP)
+		}
+		// calculate profit
+		profit := calculateProfit(todayPositions, true)
+		if profit >= profitGoal {
+			// if current positions are making profit or close to the profit goal close all positions
+			onGoingProfit := calculateProfit(latestPositions, false)
+			if onGoingProfit >= 0 {
+				tgBot.doCloseTrade(latestPositions)
+				// confirm by get current positions
+				latestPositions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
+				if err != nil {
+					println("Error getting current user positions: ", err)
+				}
+				if len(latestPositions) == 0 {
+					// send message to user
+					tgBot.sendMessage("Profit goal of "+strconv.FormatFloat(profitGoal, 'f', 2, 64)+" reached. Bot is now sleepig until tomorrow", 0)
+				}
+
+			}
+
+		}
+	}
+
+}
+
+// function to get today profit
+func (tgBot *TgBot) getTodayProfit() float64 {
+	// get today positiions from metaapi
+	todayPositions, errP := tgBot.getTodayPositions()
+	if errP != nil {
+		println("Error getting today positions: ", errP)
+	}
+	// calculate profit
+	profit := calculateProfit(todayPositions, false)
+	return profit
+}
+
+// reached profit goal
+func (tgBot *TgBot) reachedProfitGoal() bool {
+	profitGoal := tgBot.RedisClient.GetDailyProfitGoal()
+	if profitGoal > 0 {
+		profit := tgBot.getTodayProfit()
+		if profit >= profitGoal {
+			return true
+		}
+	}
+	return false
+}
+
+func extractChannelIDFromClientId(id string) int {
+	re := regexp.MustCompile(`^[^@]+@(\d+)_`)
+	matches := re.FindStringSubmatch(id)
+	if len(matches) < 2 {
+		return 0
+	}
+	channelID, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
+	return channelID
+}
+
+func getWinnigPositions(positions []MetaApiPosition) []MetaApiPosition {
+	var result []MetaApiPosition
+	for _, position := range positions {
+		if position.Profit > 0 {
+			result = append(result, position)
+		}
+	}
+	return result
+}
+
+func getLoosingPositions(positions []MetaApiPosition) []MetaApiPosition {
+	var result []MetaApiPosition
+	for _, position := range positions {
+		if position.Profit < 0 {
+			result = append(result, position)
+		}
+	}
+	return result
+}
+
+// curl -X POST --header 'Content-Type: application/json' --header 'Accept: application/json' --header 'auth-token: token' -d '{
+// "actionType": "POSITION_PARTIAL",
+// "positionId":"46648037",
+// "volume": 0.01
+// }' 'https://mt-client-api-v1.new-york.agiliumtrade.ai/users/current/accounts/865d3a4d-3803-486d-bdf3-a85679d9fad2/trade'
+func (tgBot *TgBot) doCloseHalfProfitTrade(positions []MetaApiPosition) error {
+	// get entry price base on positions
+	entryPrice := 0.0
+	tradeSuccess := false
+	// generate a telegram response for the bot
+	botMessage := fmt.Sprintf("✅ Close half profit trade 🎉")
+	for _, position := range positions {
+		halfVolume := position.Volume / 2
+		//
+		if entryPrice == 0 {
+			// safe
+			entryPrice = position.OpenPrice
+		}
+		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+		metaApiRequest := MetaApiTradeRequest{
+			ActionType: "POSITION_PARTIAL",
+			PositionID: &position.ID,
+			Volume:     &halfVolume,
+		}
+		// place all positions stop loss to their open price
+		for j := 0; j < 3; j++ {
+			trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, tgBot.AppConfig.MetaApiAccountID,
+				tgBot.AppConfig.MetaApiToken)
+			//
+			if err != nil {
+				log.Printf("Error placing trade: %v", err)
+				if j == 2 {
+					// send parsed error message from bot
+					// generate error message with reason
+					botErrorMessage := fmt.Sprintf("❌ Failed closing half profit trade")
+					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+						fmt.Sprintf("❌ Error: %s", err))
+					tgBot.sendMessage(botMessage, int(positionMessageId))
+				}
+				continue
+			}
+			errorTrade := HandleTradeError(trade.NumericCode)
+			if tradeErr, ok := errorTrade.(*TradeError); ok {
+				if tradeErr.Type == Success {
+					if !tradeSuccess {
+						tradeSuccess = true
+					}
+					log.Printf("Trade update placed successfully: %v", trade)
+					// append message to inform user that we moved the stop loss to the entry price of this current tp
+					botMessage = fmt.Sprintf("%s\n%s", botMessage,
+						fmt.Sprintf("➡️Closed half profit trade"))
+					// append with values on next  line
+					botMessage = fmt.Sprintf("%s\n%s", botMessage,
+						fmt.Sprintf("➡️Position ID: %s\n", position.ID))
+					// get message to reply to // get chat message and reply to it
+					sendMessage, errM := tgBot.sendMessage(botMessage, int(positionMessageId))
+					if errM != nil {
+						return errM
+					}
+					if sendMessage != nil {
+
+					}
+					break
+				} else {
+					// if last retry send error message
+					if j == 2 {
+						botErrorMessage := fmt.Sprintf("❌ Failed closing trade")
+						botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+							fmt.Sprintf("❌ Error: %s", tradeErr.Description))
+						messageT, err := tgBot.sendMessage(botMessage, int(positionMessageId))
+						if messageT != nil {
+
+						}
+						if err != nil {
+							log.Printf("Error sending message: %v", err)
+						}
+						break
+					}
+					time.Sleep(150 * time.Millisecond)
+					continue
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func calculateProfit(positions []MetaApiPosition, filledOnly bool) float64 {
+	// check if position state is ORDER_STATE_FILLED and addition the takeProfit field
+	profit := 0.0
+	for _, position := range positions {
+		profit += position.Profit
+	}
+	return profit
+}
+
+// curl --location 'https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/174013a4-0a6e-4f10-bda7-feee1a846b4a/history-orders/time/2024-10-27T00:00:16Z/2024-10-28T00:00:16Z' \
+// --header 'auth-token: eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiJhOWI3Y2M0ZDkzYzA2NDNmYjc1NDYyNjI1YmI3YjBmMiIsInBlcm1pc3Npb25zIjpbXSwiYWNjZXNzUnVsZXMiOlt7ImlkIjoidHJhZGluZy1hY2NvdW50LW1hbmFnZW1lbnQtYXBpIiwibWV0aG9kcyI6WyJ0cmFkaW5nLWFjY291bnQtbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoibWV0YWFwaS1yZXN0LWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoibWV0YWFwaS1ycGMtYXBpIiwibWV0aG9kcyI6WyJtZXRhYXBpLWFwaTp3czpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoibWV0YWFwaS1yZWFsLXRpbWUtc3RyZWFtaW5nLWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6d3M6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6Im1ldGFzdGF0cy1hcGkiLCJtZXRob2RzIjpbIm1ldGFzdGF0cy1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciIsIndyaXRlciJdLCJyZXNvdXJjZXMiOlsiKjokVVNFUl9JRCQ6KiJdfSx7ImlkIjoicmlzay1tYW5hZ2VtZW50LWFwaSIsIm1ldGhvZHMiOlsicmlzay1tYW5hZ2VtZW50LWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJjb3B5ZmFjdG9yeS1hcGkiLCJtZXRob2RzIjpbImNvcHlmYWN0b3J5LWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJtdC1tYW5hZ2VyLWFwaSIsIm1ldGhvZHMiOlsibXQtbWFuYWdlci1hcGk6cmVzdDpkZWFsaW5nOio6KiIsIm10LW1hbmFnZXItYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6ImJpbGxpbmctYXBpIiwibWV0aG9kcyI6WyJiaWxsaW5nLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19XSwidG9rZW5JZCI6IjIwMjEwMjEzIiwiaW1wZXJzb25hdGVkIjpmYWxzZSwicmVhbFVzZXJJZCI6ImE5YjdjYzRkOTNjMDY0M2ZiNzU0NjI2MjViYjdiMGYyIiwiaWF0IjoxNzI5OTgyOTIxLCJleHAiOjE3Mzc3NTg5MjF9.Io-bIjaBeEZyYAcNpta8QlGM3HeOtS8v4x3rJoSTuzP4aqqLmazYMhsvVVWXAOa-7BW0Idp5HwVkxp2oACPj8vcdSoRY0OsmopAcSP6tWGK-S3oCPS2ig3EaYR2WNiaPkg5rnye_lafBNKEZnQ9OrETYJOl_7hT-Rbw_PIOJMhASzdHsiBKsPJ7_h-qI_xTFVLtBfMgwBsnoAL_RCc4SwbyShw7kIwqv1t2aKrZOOzfDrTlYLCeDXOou62nezHxAHmSmPoiUgcSOq1Q34n71xq12H2Jk9AecyFJrP-Ayycx1a7fy0Nb6kanvMHV-SYQwkLDcC-J1h8QN5uqnSXSByI6K9JheopN-bG14VXFRu6DYOr-MCHDiv1tRkPzc_P9SJQKktkN_Tvrodp7pEVdr4Bczghd6dcZ0OoauwF_dlreHx12hHTEoH-pnfglW5zdtirp0BlUpBAg6OHMWzc1aVz8HKhgANQfACJys62FqUgpwe0d_sZ2rRJI6aA8mp5bkC3uMlN-dtCI82WhOvoXyBqCGp2lPxwxiXClR7m2DDq5OzVIeDolW94G0HJV-CADAQlu4xkKwpGVDovFytzXwuvRxoMxrAu1W1SxIDEOXa5t-vFUrV0coaaiPeRzTRaYYAyKul143TYDCKK62ve1G7kwXOZWjuk3pcUkrO2Uvl1o' \
+// --header 'Accept: application/json'
+// day from midnight to midnight
+func (tgBot *TgBot) getTodayPositions() ([]MetaApiPosition, error) {
+	startDay := time.Now().Format("2006-01-02T00:00:00Z")
+	endDay := time.Now().Add(24 * time.Hour).Format("2006-01-02T00:00:00Z")
+	url := fmt.Sprintf("%s/users/current/accounts/%s/history-deals/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
+		tgBot.AppConfig.MetaApiAccountID, startDay, endDay)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("failed to fetch today positions")
+	}
+
+	var positions []MetaApiPosition
+	err = json.NewDecoder(resp.Body).Decode(&positions)
+	if err != nil {
+		return nil, err
+	}
+
+	return positions, nil
 }
 
 func extractMessageIdFromClientId(id string) int {

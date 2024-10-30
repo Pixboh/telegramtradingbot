@@ -54,6 +54,8 @@ func (tgBot *TgBot) Start() {
 	// run cron
 	c := cron.New()
 	c.AddFunc("@every 1m", tgBot.checkCurrentPositions) // Adapter le délai
+	// TODO remove line
+	tgBot.checkCurrentPositions()
 	c.Start()
 	if err := tgBot.run(ctx); err != nil {
 		panic(err)

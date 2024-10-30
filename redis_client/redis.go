@@ -376,3 +376,70 @@ func (rdClient *RedisClient) IsTradeMessageIdFollowUpExist(messageId int64) bool
 	}
 	return false
 }
+
+func (rdClient *RedisClient) GetDailyProfitGoal() float64 {
+	profit := rdClient.Rdb.Get(ctx, "daily_profit_goal")
+	if profit.Err() != nil {
+		return 0
+	}
+	profitFloat, _ := strconv.ParseFloat(profit.Val(), 64)
+	return profitFloat
+}
+
+func (rdClient *RedisClient) SetDailyProfitGoal(profit float64) {
+	rdClient.Rdb.Set(ctx, "daily_profit_goal", profit, 0)
+}
+
+func (rdClient *RedisClient) SetBotStatus(s string) {
+	rdClient.Rdb.Set(ctx, "bot_status", s, 0)
+}
+
+func (rdClient *RedisClient) GetBotStatus() string {
+	status := rdClient.Rdb.Get(ctx, "bot_status")
+	if status.Err() != nil {
+		return ""
+	}
+	return status.Val()
+}
+
+// enable breakeven for all
+func (rdClient *RedisClient) EnableBreakeven() {
+	rdClient.Rdb.Set(ctx, "breakeven_enabled_for_all", "true", 0)
+}
+
+// disable breakeven for all
+func (rdClient *RedisClient) DisableBreakeven() {
+	rdClient.Rdb.Set(ctx, "breakeven_enabled_for_all", "false", 0)
+}
+
+// is breakeven enabled for all
+func (rdClient *RedisClient) IsBreakevenEnabledForAll() bool {
+	enabled := rdClient.Rdb.Get(ctx, "breakeven_enabled_for_all")
+	if enabled.Err() != nil {
+		return true
+	}
+	return enabled.Val() == "true"
+}
+
+func (rdClient *RedisClient) IsBreakevenEnabled(id int) bool {
+	// is breakeven enabled for all
+	if rdClient.IsBreakevenEnabledForAll() {
+		return true
+	}
+	enabled := rdClient.Rdb.HGet(ctx, "breakeven_enabled", strconv.Itoa(id))
+	if enabled.Err() != nil {
+		return false
+	}
+	return enabled.Val() == "1"
+}
+func (rdClient *RedisClient) SetBreakevenEnabled(id int, enabled bool) {
+	rdClient.Rdb.HSet(ctx, "breakeven_enabled", strconv.Itoa(id), enabled)
+}
+
+func (rdClient *RedisClient) SetBreakevenEnabledForAll(b bool) {
+	if b {
+		rdClient.EnableBreakeven()
+	} else {
+		rdClient.DisableBreakeven()
+	}
+}
