@@ -387,16 +387,25 @@ func (tgBot *TgBot) setChannelBreakeven(b *gotgbot.Bot, ctx *ext.Context, update
 	// get all working channelIds
 	channelIds := tgBot.RedisClient.GetChannels()
 	// load telegram channelIds
-	inputChannles := make([]tg.InputChannelClass, 0)
+	// list of channels telegram
+	telegramChats := make([]tg.MessagesChats, 0)
 	for _, channelId := range channelIds {
+		inputChannles := make([]tg.InputChannelClass, 0)
 		inputChannles = append(inputChannles, &tg.InputChannel{
-			ChannelID:  channelId,
-			AccessHash: 0,
+			ChannelID: channelId,
 		})
-	}
-	telegramChannelsByIds, errTg := tgBot.tdClient.API().ChannelsGetChannels(context.Background(), inputChannles)
-	if errTg != nil {
-		return fmt.Errorf("failed to get channels: %w", errTg)
+		telegramChannelById, errTg := tgBot.tdClient.API().ChannelsGetChannels(context.Background(), inputChannles)
+		if errTg != nil {
+			//		return fmt.Errorf("failed to get channels: %w", errTg)
+		}
+		if telegramChannelById == nil {
+			continue
+		} else {
+			// cast to chats
+			tMessageChat := telegramChannelById.(*tg.MessagesChats)
+			telegramChats = append(telegramChats, *tMessageChat)
+		}
+
 	}
 	// create inline keyboard
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
@@ -411,10 +420,9 @@ func (tgBot *TgBot) setChannelBreakeven(b *gotgbot.Bot, ctx *ext.Context, update
 			CallbackData: fmt.Sprintf("breakeven_authorize_all"),
 		},
 	})
-	switch v := telegramChannelsByIds.(type) {
-	case *tg.MessagesChats:
-		{
-			for _, channelItem := range v.Chats {
+	{
+		for _, channelItemA := range telegramChats {
+			for _, channelItem := range channelItemA.Chats {
 				if channel, ok := channelItem.(*tg.Channel); ok {
 					text := channel.Title
 					if tgBot.RedisClient.IsBreakevenEnabled(int(channel.ID)) {
