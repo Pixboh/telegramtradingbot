@@ -116,18 +116,24 @@ func (rdClient *RedisClient) IsChannelExist(channelId int64) bool {
 }
 
 // trading default volume
-func (rdClient *RedisClient) SetTradingVolume(volume float64) {
+func (rdClient *RedisClient) SetDefaultTradingVolume(volume float64) {
 	rdClient.Rdb.Set(context.Background(), "trading_volume", volume, 0)
 }
 
-// get trading default volume default to 0.001 if not set
-func (rdClient *RedisClient) GetTradingVolume() float64 {
+func (rdClient *RedisClient) GetDefaultTradingVolume() float64 {
 	volume := rdClient.Rdb.Get(context.Background(), "trading_volume")
 	if volume.Err() != nil {
-		return 0.01
+		return 0.001
 	}
 	volumeFloat, _ := strconv.ParseFloat(volume.Val(), 64)
 	return volumeFloat
+}
+
+// get trading default volume default to 0.001 if not set
+func (rdClient *RedisClient) GetTradingVolume(channelId int) float64 {
+	// if channel volume is defined, it will be used instead of the default volume
+	volume := rdClient.GetChannelVolume(channelId)
+	return volume
 }
 
 //type TradeRequest struct {
@@ -324,12 +330,16 @@ func (r *RedisClient) SetRiskPercentage(risk float64) {
 }
 
 func (r *RedisClient) GetRiskPercentage() float64 {
+	defaultRisk := 0.01
 	// Obtenir le pourcentage depuis Redis
 	risk := r.Rdb.Get(ctx, "risk_percentage")
 	if risk.Err() != nil {
-		return 0
+		return defaultRisk
 	}
 	riskFloat, _ := strconv.ParseFloat(risk.Val(), 64)
+	if riskFloat == 0 {
+		return defaultRisk
+	}
 	return riskFloat
 }
 
@@ -445,14 +455,37 @@ func (rdClient *RedisClient) SetBreakevenEnabledForAll(b bool) {
 }
 
 func (rdClient *RedisClient) GetMaxOpenTrades() int {
+	defaultOpenedTrades := 10
 	max := rdClient.Rdb.Get(ctx, "max_open_trades")
 	if max.Err() != nil {
-		return 0
+		return defaultOpenedTrades
 	}
 	maxInt, _ := strconv.Atoi(max.Val())
+	// default to ten
+	if maxInt == 0 {
+		return defaultOpenedTrades
+	}
 	return maxInt
 }
 
 func (rdClient *RedisClient) SetMaxOpenTrades(max int) {
 	rdClient.Rdb.Set(ctx, "max_open_trades", max, 0)
+}
+
+// if channel volume is defined, it will be used instead of the default volume
+func (rdClient *RedisClient) GetChannelVolume(i int) float64 {
+	defaultVolume := rdClient.GetDefaultTradingVolume()
+	volume := rdClient.Rdb.HGet(ctx, "channel_volume", strconv.Itoa(i))
+	if volume.Err() != nil {
+		return defaultVolume
+	}
+	volumeFloat, _ := strconv.ParseFloat(volume.Val(), 64)
+	if volumeFloat == 0 {
+		return defaultVolume
+	}
+	return volumeFloat
+}
+
+func (rdClient *RedisClient) SetChannelVolume(i int, volume float64) {
+	rdClient.Rdb.HSet(ctx, "channel_volume", strconv.Itoa(i), volume)
 }

@@ -14,7 +14,7 @@ func calculateProfitPriceInDollar(openPrice float64, closeProfit float64, takePr
 
 }
 
-func calulatePipsPrice(openPrice float64, closePrice float64, symbol string) float64 {
+func calulatePips(openPrice float64, closePrice float64, symbol string) float64 {
 	currencyPointSize := getCurrencyPointSize(symbol)
 	pips := (closePrice - openPrice) / currencyPointSize
 	return pips
@@ -66,7 +66,6 @@ func isTradeValidWith3TP(entryPrice, stopLoss, tp1, tp2, tp3, minRiskRewardRatio
 		fmt.Println("Erreur : le stop loss doit être inférieur au prix d'entrée.")
 		return false
 	}
-
 	// Calcul des récompenses potentielles pour les TPs valides uniquement
 	totalReward := 0.0
 	validTPCount := 0
@@ -104,4 +103,28 @@ func isTradeValidWith3TP(entryPrice, stopLoss, tp1, tp2, tp3, minRiskRewardRatio
 
 	// Vérification si le ratio global est suffisant
 	return globalRiskRewardRatio >= minRiskRewardRatio
+}
+
+func (tgBot *TgBot) RiskManagementEvaluation(request *TradeRequest, price float64, accountBalance float64, channelId int) (*TradeRequest, error) {
+	// here we will evaluate the risk management of the trade request
+	stopLoss := request.StopLoss
+	tp1 := request.TakeProfit1
+	tp2 := request.TakeProfit2
+	tp3 := request.TakeProfit3
+	minRiskRewardRatio := 1.0
+	riskPerTradePercentage := tgBot.RedisClient.GetRiskPercentage()
+	accountBalance := accountBalance
+	entryPrice := price
+	volume := tgBot.RedisClient.GetTradingVolume(channelId)
+	// stopLoss distance in pips
+	pipsToStopLoss := calulatePips(entryPrice, stopLoss, request.Symbol)
+	// dynamic volume calculation
+	dynamicVolume := tgBot.calculateVolumeSizeForTradeRequest(entryPrice, stopLoss, riskPerTradePercentage, accountBalance)
+	if dynamicVolume < volume {
+		// recorrection of volume
+		volume = dynamicVolume
+		request.Volume = volume
+	}
+	return request, nil
+
 }

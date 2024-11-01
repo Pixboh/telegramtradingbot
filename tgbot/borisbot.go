@@ -42,6 +42,8 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("stop_trading", tgBot.stop))
 	dispatcher.AddHandler(handlers.NewCommand("add_working_channels", tgBot.addWorkingChannels))
 	dispatcher.AddHandler(handlers.NewCommand("set_volume", tgBot.setTradeVolumeCallback))
+	// set a volume for each channel select_chan_volume
+	dispatcher.AddHandler(handlers.NewCommand("set_channel_volume", tgBot.setChannelVolumeCallback))
 	dispatcher.AddHandler(handlers.NewCommand("set_daily_profit_goal", tgBot.setDailyProfitGoalCallback))
 	dispatcher.AddHandler(handlers.NewCommand("set_symbols", tgBot.setSymbolsCallback))
 	// set channel breakeven
@@ -110,6 +112,14 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 			Command:     "set_risk",
 			Description: "Set risk percentage",
 		},
+		{
+			Command:     "set_max_open_trades",
+			Description: "Set maximum open trades",
+		},
+		{
+			Command:     "set_channel_volume",
+			Description: "Set channel volume",
+		},
 	}, nil)
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
@@ -120,6 +130,88 @@ func (tgBot *TgBot) setMaxOpenTradesCallback(b *gotgbot.Bot, ctx *ext.Context) e
 	return tgBot.setMaxOpenTrades(b, ctx, false)
 }
 
+func (tgBot *TgBot) setChannelVolumeCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setChannelVolume(b, ctx, false)
+}
+
+// select a channel from list of added channels then set a volume for it base on a list of custom volumes.
+// it will help to customize volume for each channel
+func (tgBot *TgBot) setChannelVolume(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// first show list of channels
+	// get all working channelIds
+	channelIds := tgBot.RedisClient.GetChannels()
+	// load telegram channelIds
+	// list of channels telegram
+	telegramChats := make([]tg.MessagesChats, 0)
+	for _, channelId := range channelIds {
+		inputChannles := make([]tg.InputChannelClass, 0)
+		inputChannles = append(inputChannles, &tg.InputChannel{
+			ChannelID: channelId,
+		})
+		telegramChannelById, errTg := tgBot.tdClient.API().ChannelsGetChannels(context.Background(), inputChannles)
+		if errTg != nil {
+			//		return fmt.Errorf("failed to get channels: %w", errTg)
+		}
+		if telegramChannelById == nil {
+			continue
+		} else {
+			// cast to chats
+			tMessageChat := telegramChannelById.(*tg.MessagesChats)
+			telegramChats = append(telegramChats, *tMessageChat)
+		}
+
+	}
+	// create inline keyboard
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	{
+		for _, channelItemA := range telegramChats {
+			for _, channelItem := range channelItemA.Chats {
+				channelVolume := tgBot.RedisClient.GetChannelVolume(int(channelItem.(*tg.Channel).ID))
+				defaultVolume := tgBot.RedisClient.GetDefaultTradingVolume()
+				if channel, ok := channelItem.(*tg.Channel); ok {
+					text := channel.Title
+					// add arrow emoji : ➡️
+					text = text + " ➡️ " + fmt.Sprintf("%.2f", channelVolume) + ""
+					if channelVolume != defaultVolume {
+						text = text + " ✅"
+					}
+					inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+						{
+							Text:         text,
+							CallbackData: fmt.Sprintf("channel_volume_%s", strconv.Itoa(int(channel.ID))),
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the channel to set the volume:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the channel to set the volume:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
+}
 func (tgBot *TgBot) setMaxOpenTrades(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
 	// Create the inline keyboard buttons
 	// list of volumes
@@ -241,7 +333,7 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	text = text + "\n-------------------------"
 
 	// current trade volume
-	text = text + "\nTrade Volume : 📈" + fmt.Sprintf("%.2f", tgBot.RedisClient.GetTradingVolume())
+	text = text + "\nTrade Volume : 📈" + fmt.Sprintf("%.2f", tgBot.RedisClient.GetDefaultTradingVolume())
 	// separator
 	text = text + "\n-------------------------"
 	// strategy
@@ -533,7 +625,7 @@ func (tgBot *TgBot) setTradeVolume(b *gotgbot.Bot, ctx *ext.Context, update bool
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
 	for _, volume := range volumes {
 		// current volule
-		currentVolume := tgBot.RedisClient.GetTradingVolume()
+		currentVolume := tgBot.RedisClient.GetDefaultTradingVolume()
 		// limit to 2
 		text := fmt.Sprintf("%.2f", (volume*100)/100)
 		if currentVolume == volume {
@@ -761,7 +853,7 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 			return fmt.Errorf("invalid volume value")
 		}
 
-		tgBot.RedisClient.SetTradingVolume(volume)
+		tgBot.RedisClient.SetDefaultTradingVolume(volume)
 		// Confirmer la sélection à l'utilisateur
 		return tgBot.setTradeVolume(b, ctx, true)
 	}
@@ -892,6 +984,58 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		// Mettre à jour l'affichage
 		return tgBot.setDailyProfitGoal(b, ctx, true)
 	}
+	// channel volume
+	if strings.HasPrefix(data, "channel_volume_") {
+		// if we click on a channel volume show the list of volumes to be set
+		channelIDStr := strings.TrimPrefix(data, "channel_volume_")
+		channelID, err := strconv.Atoi(channelIDStr)
+		if err != nil {
+			return fmt.Errorf("invalid channel ID")
+		}
+		return tgBot.selectChannelVolume(b, ctx, channelID)
+	}
+	// select channel volume
+	if strings.HasPrefix(data, "select_chan_volume_") {
+		// Extraire le channel ID et le volume
+		parts := strings.Split(strings.TrimPrefix(data, "select_chan_volume_"), "_")
+		channelID, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid channel ID")
+		}
+		volume, err := strconv.ParseFloat(parts[1], 64)
+		if err != nil {
+			return fmt.Errorf("invalid volume")
+		}
+
+		// Stocker le volume du channel dans Redis
+		tgBot.RedisClient.SetChannelVolume(channelID, volume)
+
+		// Mettre à jour l'affichage
+		return tgBot.selectChannelVolume(b, ctx, channelID)
+	}
+	// max open trades
+	if strings.HasPrefix(data, "max_open_trades_") {
+		maxOpenTradesStr := strings.TrimPrefix(data, "max_open_trades_")
+		maxOpenTrades, err := strconv.Atoi(maxOpenTradesStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse max open trades: %w", err)
+		}
+
+		// Stocker le nombre de trades ouverts max dans Redis
+		tgBot.RedisClient.SetMaxOpenTrades(maxOpenTrades)
+
+		// Répondre à l'utilisateur
+		_, err = ctx.CallbackQuery.Answer(b, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Max open trades updated successfully!",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to answer callback query: %w", err)
+		}
+
+		// Mettre à jour l'affichage
+		return tgBot.setMaxOpenTrades(b, ctx, true)
+	}
+
 	switch ctx.CallbackQuery.Data {
 	case "start_trading":
 		// Add your logic to start trading
@@ -908,6 +1052,8 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		return tgBot.paginateChannels(b, ctx, 0)
 	case "set_volume":
 		return tgBot.setTradeVolume(b, ctx, false)
+	case "set_channel_volume":
+		return tgBot.setChannelVolume(b, ctx, true)
 	case "set_daily_profit_goal":
 		return tgBot.setDailyProfitGoal(b, ctx, false)
 	case "authorize_all_symb":
@@ -921,6 +1067,51 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		}
 	default:
 	}
+	return nil
+}
+
+// select channel volume add a previous button to go back to the list of channels
+func (tgBot *TgBot) selectChannelVolume(b *gotgbot.Bot, ctx *ext.Context, channelID int) error {
+	// Create the inline keyboard buttons
+	// list of volumes
+	volumes := []float64{0.01, 0.02, 0.03, 0.04, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 2, 10}
+	// generate inlineKeyboard base on volumes
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	// previous button with emoji back : ⬅️
+	inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+		{
+			Text:         " ⬅️ Back",
+			CallbackData: "set_channel_volume",
+		},
+	})
+	for _, volume := range volumes {
+		// current volule
+		currentVolume := tgBot.RedisClient.GetChannelVolume(channelID)
+		// limit to 2
+		text := fmt.Sprintf("%.2f", (volume*100)/100)
+		if currentVolume == volume {
+			text = text + " ✅"
+		}
+
+		inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("select_chan_volume_%d_%f", channelID, (volume*100)/100),
+			},
+		})
+	}
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+	_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the trade volume for the channel:"), &gotgbot.EditMessageTextOpts{
+		ParseMode:   "HTML",
+		ReplyMarkup: replyMarkup,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send start message: %w", err)
+	}
+
 	return nil
 }
 

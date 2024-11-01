@@ -120,7 +120,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		return nil, nil, err
 	}
 
-	volume := tgBot.RedisClient.GetTradingVolume()
+	volume := tgBot.RedisClient.GetTradingVolume(int(input.ChannelID))
 	openaiApiKey := tgBot.AppConfig.OpenAiToken
 	metaApiToken := tgBot.AppConfig.MetaApiToken
 	metaApiAccountId := tgBot.AppConfig.MetaApiAccountID
@@ -196,28 +196,25 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		}
 
 		// Fetch current price from MetaApi
-		//priceResponse, err := fetchCurrentPrice(tradeRequest.Symbol, metaApiAccountId, metaApiToken)
-		//if err != nil {
-		//	log.Printf("Error fetching price: %v", err)
-		//	return nil, nil, err
-		//}
+		priceResponse, err := fetchCurrentPrice(tradeRequest.Symbol, metaApiAccountId, metaApiToken)
+		if err != nil {
+			log.Printf("Error fetching price: %v", err)
+			return nil, nil, err
+		}
 
-		//var currentPrice float64
-		//if tradeRequest.ActionType == "ORDER_TYPE_BUY" {
-		//	currentPrice = priceResponse.Ask
-		//} else if tradeRequest.ActionType == "ORDER_TYPE_SELL" {
-		//	currentPrice = priceResponse.Bid
-		//} else {
-		//	// Handle other action types or return an error
-		//	log.Println("Unsupported action type")
-		//	return nil, nil, errors.New("unsupported action type")
-		//}
-		//
-		//// Check if the current price is within the defined entry zone
-		//if !IsPriceInEntryZone(currentPrice, tradeRequest.EntryZoneMin, tradeRequest.EntryZoneMax) {
-		//	log.Println("Current price : " + strconv.FormatFloat(currentPrice, 'f', -1, 64) + " is not within the entry zone. Min" + strconv.FormatFloat(tradeRequest.EntryZoneMin, 'f', -1, 64) + " Max" + strconv.FormatFloat(tradeRequest.EntryZoneMax, 'f', -1, 64))
-		//	return nil, nil, errors.New("current price is not within the entry zone")
-		//}
+		var currentPrice float64
+		if tradeRequest.ActionType == "ORDER_TYPE_BUY" {
+			currentPrice = priceResponse.Ask
+		} else if tradeRequest.ActionType == "ORDER_TYPE_SELL" {
+			currentPrice = priceResponse.Bid
+		} else {
+			// Handle other action types or return an error
+			log.Println("Unsupported action type")
+			return nil, nil, errors.New("unsupported action type")
+		}
+
+		// pass trade request to risk management to validate or reject the trade
+		tgBot.RiskManagementEvaluation(tradeRequest, currentPrice)
 
 		// Proceed with the trade
 		metaApiRequests := ConvertToMetaApiTradeRequests(*tradeRequest, strategy)
