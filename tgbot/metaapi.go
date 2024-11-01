@@ -119,6 +119,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		tgBot.sendMessage(fmt.Sprintf("❌ Error fetching symbols from MetaApi : %v", err), 0)
 		return nil, nil, err
 	}
+
 	volume := tgBot.RedisClient.GetTradingVolume()
 	openaiApiKey := tgBot.AppConfig.OpenAiToken
 	metaApiToken := tgBot.AppConfig.MetaApiToken
@@ -136,6 +137,18 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			log.Printf("Reached daily profit goal")
 			tgBot.sendMessage("❌ Daily profit goal reached", 0)
 			return nil, nil, errors.New("daily profit goal reached")
+		}
+		// get current position
+		positions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
+		if err != nil {
+			return nil, nil, err
+		}
+		// check if max trades position reached
+		maxOpenedTrade := tgBot.RedisClient.GetMaxOpenTrades()
+		if len(positions) >= maxOpenedTrade {
+			log.Printf("Max opened trades : %d reached", maxOpenedTrade)
+			tgBot.sendMessage("❌ Skipping signal. Max opened trades : "+strconv.Itoa(maxOpenedTrade)+" reached", 0)
+			return nil, nil, errors.New("max opened trades reached")
 		}
 
 		tradeRequest, err := tgBot.GptParseNewMessage(input.Message, tgBot.AppConfig.OpenAiToken, symbols)

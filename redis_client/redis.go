@@ -443,3 +443,16 @@ func (rdClient *RedisClient) SetBreakevenEnabledForAll(b bool) {
 		rdClient.DisableBreakeven()
 	}
 }
+
+func (rdClient *RedisClient) GetMaxOpenTrades() int {
+	max := rdClient.Rdb.Get(ctx, "max_open_trades")
+	if max.Err() != nil {
+		return 0
+	}
+	maxInt, _ := strconv.Atoi(max.Val())
+	return maxInt
+}
+
+func (rdClient *RedisClient) SetMaxOpenTrades(max int) {
+	rdClient.Rdb.Set(ctx, "max_open_trades", max, 0)
+}

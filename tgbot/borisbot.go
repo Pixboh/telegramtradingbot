@@ -49,6 +49,8 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("set_strategy", tgBot.setStrategyCallback))
 	dispatcher.AddHandler(handlers.NewCommand("status", tgBot.GetBotStatus))
 	dispatcher.AddHandler(handlers.NewCommand("set_risk", tgBot.setRiskPercentageCallback))
+	// maximum open trades
+	dispatcher.AddHandler(handlers.NewCommand("set_max_open_trades", tgBot.setMaxOpenTradesCallback))
 
 	dispatcher.AddHandler(handlers.NewCallback(nil, tgBot.handleCallback))
 
@@ -112,6 +114,57 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
+}
+
+func (tgBot *TgBot) setMaxOpenTradesCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setMaxOpenTrades(b, ctx, false)
+}
+
+func (tgBot *TgBot) setMaxOpenTrades(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// Create the inline keyboard buttons
+	// list of volumes
+	maxOpenTrades := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	// generate inlineKeyboard base on volumes
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	for _, maxOpenTrade := range maxOpenTrades {
+		// current volule
+		currentMaxOpenTrade := tgBot.RedisClient.GetMaxOpenTrades()
+		// limit to 2
+		text := fmt.Sprintf("%d", maxOpenTrade)
+		if currentMaxOpenTrade == maxOpenTrade {
+			text = text + " ✅"
+		}
+		inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("max_open_trade_%d", maxOpenTrade),
+			},
+		})
+	}
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the maximum open trades:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the maximum open trades:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (tgBot *TgBot) setStrategyCallback(b *gotgbot.Bot, ctx *ext.Context) error {
