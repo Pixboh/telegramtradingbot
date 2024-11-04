@@ -153,7 +153,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		}
 		// check if max trades position reached
 		maxOpenedTrade := tgBot.RedisClient.GetMaxOpenTrades()
-		if len(positions) >= maxOpenedTrade {
+		if len(positions) > 0 && len(positions) > maxOpenedTrade {
 			log.Printf("Max opened trades : %d reached", maxOpenedTrade)
 			tgBot.sendMessage("❌ Skipping signal. Max opened trades : "+strconv.Itoa(maxOpenedTrade)+" reached", 0)
 			return nil, nil, errors.New("max opened trades reached")
