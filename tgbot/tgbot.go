@@ -54,6 +54,8 @@ func (tgBot *TgBot) Start() {
 	// run cron
 	c := cron.New()
 	c.AddFunc("@every 1m", tgBot.checkCurrentPositions) // Adapter le délai
+	// cron to run every day at 00:00
+	c.AddFunc("0 0 * * *", tgBot.updateDailyInfo)
 	// TODO remove line
 	tgBot.checkCurrentPositions()
 	c.Start()
@@ -248,6 +250,34 @@ func (tgBot *TgBot) PushHandleRequestInputToRedis(input *HandleRequestInput) err
 	}
 	return nil
 
+}
+
+func (tgBot *TgBot) updateDailyInfo() {
+	// get account balance
+	information, err := tgBot.getAccountInformation()
+	if err != nil {
+		return
+	}
+	balance := information.Balance
+	// save account balance
+	tgBot.RedisClient.SetAccountBalance(balance)
+
+}
+
+// get account balance
+func (tgBot *TgBot) getAccountBalance() float64 {
+	balance := tgBot.RedisClient.GetAccountBalance()
+	if balance == 0 {
+		// get account balance
+		information, err := tgBot.getAccountInformation()
+		if err != nil {
+			return 0
+		}
+		balance = information.Balance
+		// save account balance
+		tgBot.RedisClient.SetAccountBalance(balance)
+	}
+	return balance
 }
 
 //

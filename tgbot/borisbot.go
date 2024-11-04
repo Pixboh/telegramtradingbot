@@ -1014,8 +1014,8 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		return tgBot.selectChannelVolume(b, ctx, channelID)
 	}
 	// max open trades
-	if strings.HasPrefix(data, "max_open_trades_") {
-		maxOpenTradesStr := strings.TrimPrefix(data, "max_open_trades_")
+	if strings.HasPrefix(data, "max_open_trade_") {
+		maxOpenTradesStr := strings.TrimPrefix(data, "max_open_trade_")
 		maxOpenTrades, err := strconv.Atoi(maxOpenTradesStr)
 		if err != nil {
 			return fmt.Errorf("failed to parse max open trades: %w", err)

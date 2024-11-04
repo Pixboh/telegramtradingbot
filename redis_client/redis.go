@@ -489,3 +489,16 @@ func (rdClient *RedisClient) GetChannelVolume(i int) float64 {
 func (rdClient *RedisClient) SetChannelVolume(i int, volume float64) {
 	rdClient.Rdb.HSet(ctx, "channel_volume", strconv.Itoa(i), volume)
 }
+
+func (rdClient *RedisClient) SetAccountBalance(balance float64) {
+	rdClient.Rdb.Set(ctx, "account_balance", balance, 0)
+}
+
+func (rdClient *RedisClient) GetAccountBalance() float64 {
+	balance := rdClient.Rdb.Get(ctx, "account_balance")
+	if balance.Err() != nil {
+		return 0
+	}
+	balanceFloat, _ := strconv.ParseFloat(balance.Val(), 64)
+	return balanceFloat
+}

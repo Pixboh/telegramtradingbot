@@ -14,26 +14,23 @@ func calculateProfitPriceInDollar(openPrice float64, closeProfit float64, takePr
 
 }
 
-func calulatePips(openPrice float64, closePrice float64, symbol string) float64 {
+func calculatePips(openPrice float64, closePrice float64, symbol string) float64 {
 	currencyPointSize := getCurrencyPointSize(symbol)
 	pips := (closePrice - openPrice) / currencyPointSize
 	return pips
 }
 
 // caculate volume size for trade request, minimum volume is 0.01
-func (tgBot *TgBot) calculateVolumeSizeForTradeRequest(entryPrice float64, stopLoss float64, riskPercentage float64, accountBalance float64) float64 {
-	// calculate volume size
-	// calculate risk amount
-	riskAmount := accountBalance * riskPercentage
-	// calculate pips
-	pips := math.Abs(entryPrice - stopLoss)
-	// calculate volume
-	volume := riskAmount / pips
-	// check if volume is superior to 0.01
+func (tgBot *TgBot) calculateVolumeSizeForTradeRequest(stopLossDistancePips float64, riskPercentage float64, accountBalance float64) float64 {
+	// Calcul du risque en dollar
+	riskInDollar := accountBalance * riskPercentage
+	// Calcul du volume en fonction du risque en dollar
+	volume := riskInDollar / stopLossDistancePips
+	// Volume minimum = 0.01
 	if volume < 0.01 {
 		volume = 0.01
 	}
-	return volume
+	return math.Round(volume*100) / 100
 }
 
 func getCurrencyPointSize(symbol string) float64 {
@@ -105,26 +102,21 @@ func isTradeValidWith3TP(entryPrice, stopLoss, tp1, tp2, tp3, minRiskRewardRatio
 	return globalRiskRewardRatio >= minRiskRewardRatio
 }
 
-func (tgBot *TgBot) RiskManagementEvaluation(request *TradeRequest, price float64, accountBalance float64, channelId int) (*TradeRequest, error) {
+// get trading dynamic volume
+func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64, accountBalance float64, channelId int) float64 {
 	// here we will evaluate the risk management of the trade request
 	stopLoss := request.StopLoss
-	tp1 := request.TakeProfit1
-	tp2 := request.TakeProfit2
-	tp3 := request.TakeProfit3
-	minRiskRewardRatio := 1.0
 	riskPerTradePercentage := tgBot.RedisClient.GetRiskPercentage()
-	accountBalance := accountBalance
 	entryPrice := price
 	volume := tgBot.RedisClient.GetTradingVolume(channelId)
 	// stopLoss distance in pips
-	pipsToStopLoss := calulatePips(entryPrice, stopLoss, request.Symbol)
+	pipsToStopLoss := calculatePips(entryPrice, stopLoss, request.Symbol)
 	// dynamic volume calculation
-	dynamicVolume := tgBot.calculateVolumeSizeForTradeRequest(entryPrice, stopLoss, riskPerTradePercentage, accountBalance)
-	if dynamicVolume < volume {
+	dynamicVolume := tgBot.calculateVolumeSizeForTradeRequest(pipsToStopLoss, riskPerTradePercentage, accountBalance)
+	if dynamicVolume <= volume {
 		// recorrection of volume
 		volume = dynamicVolume
-		request.Volume = volume
 	}
-	return request, nil
 
+	return volume
 }

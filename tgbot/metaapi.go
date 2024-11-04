@@ -120,7 +120,6 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		return nil, nil, err
 	}
 
-	volume := tgBot.RedisClient.GetTradingVolume(int(input.ChannelID))
 	openaiApiKey := tgBot.AppConfig.OpenAiToken
 	metaApiToken := tgBot.AppConfig.MetaApiToken
 	metaApiAccountId := tgBot.AppConfig.MetaApiAccountID
@@ -132,6 +131,15 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 	message := input.Message
 	parentRequest := input.ParentRequest
 	if parentRequest == nil {
+
+		tradeRequest, err := tgBot.GptParseNewMessage(input.Message, tgBot.AppConfig.OpenAiToken, symbols)
+		if err != nil {
+			log.Printf("Error parsing trade request with Openai: %v", err)
+			// send erreur with log to telegram
+			tgBot.sendMessage(fmt.Sprintf("❌ Error parsing trade request: %v", err), 0)
+			return nil, nil, err
+		}
+
 		// check if reached daily profit
 		if tgBot.reachedProfitGoal() {
 			log.Printf("Reached daily profit goal")
@@ -151,49 +159,15 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			return nil, nil, errors.New("max opened trades reached")
 		}
 
-		tradeRequest, err := tgBot.GptParseNewMessage(input.Message, tgBot.AppConfig.OpenAiToken, symbols)
-		if err != nil {
-			log.Printf("Error parsing trade request with Openai: %v", err)
-			// send erreur with log to telegram
-			tgBot.sendMessage(fmt.Sprintf("❌ Error parsing trade request: %v", err), 0)
-			return nil, nil, err
-		}
-
-		tradeRequest.Volume = volume
 		tradeRequest = setTradeRequestEntryZone(tradeRequest)
 		if !tgBot.RedisClient.IsSymbolExist(tradeRequest.Symbol) {
 			log.Printf("Symbol %s is not allowed", tradeRequest.Symbol)
-			// send message
+			// sen message
 			// Optional. Quoted part of the message to be replied to; 0-1024 characters after entities parsing. The quote must be an exact substring of the message to be replied to, including bold, italic, underline, strikethrough, spoiler, and custom_emoji entities. The message will fail to send if the quote isn't found in the original message.
 			tgBot.sendMessage("❌ Symbol is not allowed", 0)
 			return nil, nil, errors.New("symbol is not allowed")
 		}
 		strategy := tgBot.RedisClient.GetStrategy()
-
-		errTrade := validateTradeValue(tradeRequest, strategy)
-		// check if the same trade already exist
-		if tgBot.RedisClient.IsTradeKeyExist(tradeRequest.GenerateTradeRequestKey()) {
-			log.Printf("Trade already placed")
-			// add the new message id if not already set
-			if tgBot.RedisClient.GetTradeFirstMessageId(int64(messageId)) == 0 {
-				// get the first message id
-				firstMessageId := tgBot.RedisClient.GetTradeKeyMessageId(tradeRequest.GenerateTradeRequestKey())
-				// set first message id for current message
-				tgBot.RedisClient.SetFirstTradeMessageId(firstMessageId, int64(messageId))
-			}
-			// send message
-			tgBot.sendMessage("❌ Trade already exist", 0)
-			return nil, nil, errors.New("trade already exist")
-		}
-
-		// log fixed trade object
-		log.Printf("TradeRequest struct: %+v\n", tradeRequest)
-		if errTrade != nil {
-			log.Printf("Error validating trade request: %v", errTrade)
-			// send erreur with log to telegram
-			tgBot.sendMessage(fmt.Sprintf("❌ Error validating trade request: %v", errTrade), 0)
-			return nil, nil, errTrade
-		}
 
 		// Fetch current price from MetaApi
 		priceResponse, err := fetchCurrentPrice(tradeRequest.Symbol, metaApiAccountId, metaApiToken)
@@ -214,7 +188,34 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		}
 
 		// pass trade request to risk management to validate or reject the trade
-		tgBot.RiskManagementEvaluation(tradeRequest, currentPrice)
+		balance := tgBot.getAccountBalance()
+		volume := tgBot.GetTradingDynamicVolume(tradeRequest, currentPrice, balance, int(input.ChannelID))
+		tradeRequest.Volume = volume
+		// avoid dboule trade
+		if tgBot.RedisClient.IsTradeKeyExist(tradeRequest.GenerateTradeRequestKey()) {
+			log.Printf("Trade already placed")
+			// add the new message id if not already set
+			if tgBot.RedisClient.GetTradeFirstMessageId(int64(messageId)) == 0 {
+				// get the first message id
+				firstMessageId := tgBot.RedisClient.GetTradeKeyMessageId(tradeRequest.GenerateTradeRequestKey())
+				// set first message id for current message
+				tgBot.RedisClient.SetFirstTradeMessageId(firstMessageId, int64(messageId))
+			}
+			// send message
+			tgBot.sendMessage("❌ Trade already exist", 0)
+			return nil, nil, errors.New("trade already exist")
+		}
+		errTrade := validateTradeValue(tradeRequest, strategy)
+		// check if the same trade already exist
+
+		// log fixed trade object
+		log.Printf("TradeRequest struct: %+v\n", tradeRequest)
+		if errTrade != nil {
+			log.Printf("Error validating trade request: %v", errTrade)
+			// send erreur with log to telegram
+			tgBot.sendMessage(fmt.Sprintf("❌ Error validating trade request: %v", errTrade), 0)
+			return nil, nil, errTrade
+		}
 
 		// Proceed with the trade
 		metaApiRequests := ConvertToMetaApiTradeRequests(*tradeRequest, strategy)
@@ -244,7 +245,13 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				takeProfit = tradeRequest.TakeProfit3
 			}
 			tpNumber := i + 1
-			metaApiRequest.Volume = &volume
+			metaApiTradeVolume := tradeRequest.Volume
+			metaApiTradeVolume = metaApiTradeVolume / float64(len(metaApiRequests))
+			// minimum volume is 0.01
+			if metaApiTradeVolume < 0.01 {
+				metaApiTradeVolume = 0.01
+			}
+			metaApiRequest.Volume = &metaApiTradeVolume
 			// concat channel id and channel initial
 			chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
 			clientId := fmt.Sprintf("%s_%s_%s", chanelInitials, strconv.Itoa(int(messageId)), "TP"+strconv.Itoa(i+1))
@@ -1282,17 +1289,17 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		if err != nil {
 			println("Error getting current user positions: ", err)
 		}
+		onGoingProfit := calculateProfit(latestPositions, false)
 		// get today positiions from metaapi
 		todayPositions, errP := tgBot.getTodayPositions()
 		if errP != nil {
 			println("Error getting today positions: ", errP)
 		}
-		// calculate profit
-		profit := calculateProfit(todayPositions, true)
-		if profit >= profitGoal {
-			// if current positions are making profit or close to the profit goal close all positions
-			onGoingProfit := calculateProfit(latestPositions, false)
-			if onGoingProfit >= 0 {
+		// calculate currentDayProfit
+		currentDayProfit := calculateProfit(todayPositions, true)
+		if currentDayProfit >= profitGoal || currentDayProfit+onGoingProfit >= profitGoal {
+			// if current positions are making currentDayProfit or close to the currentDayProfit goal close all positions
+			if onGoingProfit > 0 {
 				tgBot.doCloseTrade(latestPositions)
 				// confirm by get current positions
 				latestPositions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
@@ -1529,4 +1536,51 @@ func isBreakevenSetted(position *MetaApiPosition) bool {
 		}
 	}
 	return false
+}
+
+type MetaApiAccountInformation struct {
+	Platform                    string  `json:"platform,omitempty"`
+	Broker                      string  `json:"broker,omitempty"`
+	Currency                    string  `json:"currency,omitempty"`
+	Server                      string  `json:"server,omitempty"`
+	Balance                     float64 `json:"balance,omitempty"`
+	Equity                      float64 `json:"equity,omitempty"`
+	Margin                      float64 `json:"margin,omitempty"`
+	FreeMargin                  float64 `json:"freeMargin,omitempty"`
+	Leverage                    float64 `json:"leverage,omitempty"`
+	MarginLevel                 float64 `json:"marginLevel,omitempty"`
+	TradeAllowed                bool    `json:"tradeAllowed,omitempty"`
+	MarginMode                  string  `json:"marginMode,omitempty"`
+	Name                        string  `json:"name,omitempty"`
+	Login                       int     `json:"login,omitempty"`
+	Credit                      float64 `json:"credit,omitempty"`
+	Type                        string  `json:"type,omitempty"`
+	AccountCurrencyExchangeRate float64 `json:"accountCurrencyExchangeRate,omitempty"`
+}
+
+func (tgBot *TgBot) getAccountInformation() (MetaApiAccountInformation, error) {
+	url := fmt.Sprintf("%s/users/current/accounts/%s/account-information", tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return MetaApiAccountInformation{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return MetaApiAccountInformation{}, errors.New("failed to fetch account information")
+	}
+
+	var accountInformation MetaApiAccountInformation
+	err = json.NewDecoder(resp.Body).Decode(&accountInformation)
+	if err != nil {
+		return MetaApiAccountInformation{}, err
+	}
+
+	return accountInformation, nil
 }
