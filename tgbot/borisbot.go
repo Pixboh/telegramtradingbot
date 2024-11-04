@@ -347,9 +347,23 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	// daily profit goal
 	text = text + "\nDaily Profit Goal 💰: " + fmt.Sprintf("%.2f", tgBot.RedisClient.GetDailyProfitGoal())
 	text = text + "\n-------------------------"
-
+	// meta apî account info
+	// name
+	information, err := tgBot.getAccountInformation()
+	if err != nil {
+		return err
+	}
+	text = text + "\nAccount Name 🏦: " + information.Name
+	text = text + "\n-------------------------"
 	// current profit reached
-	text = text + "\nCurrent Profit 💰: " + fmt.Sprintf("%.2f", tgBot.getTodayProfit())
+	text = text + "\nCurrent Profit 💰: " + fmt.Sprintf("%.2f", tgBot.getTodayProfit()) + " " + information.Currency
+	text = text + "\n-------------------------"
+
+	// balance
+	text = text + "\nAccount Balance 💰: " + fmt.Sprintf("%.2f", information.Balance) + " " + information.Currency
+	text = text + "\n-------------------------"
+	// broker
+	text = text + "\nBroker 🏦: " + information.Broker
 	text = text + "\n-------------------------"
 
 	ctx.EffectiveMessage.Reply(b, text, nil)
