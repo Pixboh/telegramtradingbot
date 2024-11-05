@@ -827,6 +827,12 @@ func (tgBot *TgBot) start_trading(b *gotgbot.Bot, ctx *ext.Context) error {
 		}
 	} else {
 		tgBot.RedisClient.SetBotOn()
+		err := tgBot.deployAccount()
+		if err != nil {
+			ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Failed to deploy account"), &gotgbot.SendMessageOpts{
+				ParseMode: "HTML",
+			})
+		}
 
 		// Reply to the user about stopping the bot
 		_, errA := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Bot is on, Good luck!"), &gotgbot.SendMessageOpts{

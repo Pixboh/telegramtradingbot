@@ -1316,6 +1316,8 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		}
 	}
 
+	tgBot.updateDailyInfo()
+
 }
 
 // function to get today profit
@@ -1583,4 +1585,90 @@ func (tgBot *TgBot) getAccountInformation() (MetaApiAccountInformation, error) {
 	}
 
 	return accountInformation, nil
+}
+
+// curl --location --request POST 'https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/<string>/deploy?executeForAllReplicas=true' \
+// --header 'auth-token: <string>' \
+// --header 'Accept: */*'
+// deploy account
+func (tgBot *TgBot) deployAccount() error {
+	url := fmt.Sprintf("%s/users/current/accounts/%s/deploy?executeForAllReplicas=true", tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID)
+
+	req, _ := http.NewRequest("POST", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "*/*")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return errors.New("failed to deploy account")
+	}
+
+	return nil
+}
+
+// undeploy
+// //curl --location --request POST 'https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/<string>/deploy?executeForAllReplicas=true' \
+// //--header 'auth-token: <string>' \
+// //--header 'Accept: */*'
+func (tgBot *TgBot) undeployAccount() error {
+	url := fmt.Sprintf("%s/users/current/accounts/%s/undeploy?executeForAllReplicas=true", tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID)
+
+	req, _ := http.NewRequest("POST", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "*/*")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		return errors.New("failed to undeploy account")
+	}
+
+	return nil
+}
+
+type MetaApiAccount struct {
+	ID               string `json:"_id"`
+	State            string `json:"state"`
+	ConnectionStatus string `json:"connectionStatus"`
+}
+
+// curl --location 'https://mt-client-api-v1.london.agiliumtrade.ai/users/current/accounts/<string>' \
+// --header 'auth-token: <string>' \
+// --header 'Accept: */*'
+func (tgBot *TgBot) getAccount() (MetaApiAccount, error) {
+	url := fmt.Sprintf("%s/users/current/accounts/%s", tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "*/*")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return MetaApiAccount{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return MetaApiAccount{}, errors.New("failed to fetch account")
+	}
+
+	var account MetaApiAccount
+	err = json.NewDecoder(resp.Body).Decode(&account)
+	if err != nil {
+		return MetaApiAccount{}, err
+	}
+
+	return account, nil
 }
