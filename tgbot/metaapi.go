@@ -413,7 +413,10 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				}
 
 			}
-			tgBot.doBreakeven(currentMessagePositions, 1)
+			if tgBot.RedisClient.IsBreakevenEnabled(int(channel.ID)) {
+				tgBot.doBreakeven(currentMessagePositions, 1)
+			}
+
 		} else if tradeUpdate.UpdateType == "TP2_HIT" {
 			// do breakeven
 			//	if tp1 hit modify SL to tp 1 value on all other TP
@@ -431,7 +434,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				}
 
 			}
-			tgBot.doBreakeven(currentMessagePositions, 2)
+			if tgBot.RedisClient.IsBreakevenEnabled(int(channel.ID)) {
+				tgBot.doBreakeven(currentMessagePositions, 2)
+			}
 		} else if tradeUpdate.UpdateType == "TP3_HIT" {
 			// do breakeven
 			//	if tp1 hit modify SL to tp 1 value on all other TP
@@ -449,7 +454,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				}
 
 			}
-			tgBot.doBreakeven(currentMessagePositions, 3)
+			if tgBot.RedisClient.IsBreakevenEnabled(int(channel.ID)) {
+				tgBot.doBreakeven(currentMessagePositions, 3)
+			}
 
 		} else if tradeUpdate.UpdateType == "CLOSE_TRADE" {
 			// close all positions
@@ -570,11 +577,18 @@ func (tgBot *TgBot) doBreakeven(currentMessagePositions []MetaApiPosition, tpHit
 		// add a litle margin
 		newStopLoss := calculateNewStopLossPriceForBreakeven(position.OpenPrice, position.Type)
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+		_ = TrailingStopLoss{
+			Distance: &DistanceTrailingStopLoss{
+				Distance: 0.1,
+				Units:    "RELATIVE_PRICE",
+			},
+		}
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_MODIFY",
 			StopLoss:   &newStopLoss,
 			PositionID: &position.ID,
 			TakeProfit: &position.TakeProfit,
+			//TrailingStopLoss: &trailingStopLoss,
 		}
 		curentTp := extractTPFromClientId(position.ClientID)
 		// place all positions stop loss to their open price
@@ -1074,19 +1088,24 @@ type MetaApiTradeRequest struct {
 	Expiration          *Expiration       `json:"expiration,omitempty"`
 }
 
+type DistanceTrailingStopLoss struct {
+	Distance float64 `json:"distance"`        // La distance relative à appliquer pour le SL
+	Units    string  `json:"units,omitempty"` // Unités (RELATIVE_PRICE, RELATIVE_POINTS, etc.)
+}
+
+type StopLossThreshold struct {
+	Threshold float64 `json:"threshold"` // Seuil de prix par rapport au prix d'ouverture
+	StopLoss  float64 `json:"stopLoss"`  // Valeur du stop loss
+}
+
+type ThresholdTrailingStopLoss struct {
+	Thresholds    []StopLossThreshold `json:"thresholds"`              // Liste des seuils
+	Units         string              `json:"units,omitempty"`         // Unités (ABSOLUTE_PRICE, RELATIVE_PRICE, etc.)
+	StopPriceBase string              `json:"stopPriceBase,omitempty"` // Base du prix pour calculer le SL (CURRENT_PRICE, OPEN_PRICE)
+}
+
 type TrailingStopLoss struct {
-	Distance struct {
-		Distance float64 `json:"distance,omitempty"`
-		Units    string  `json:"units,omitempty"`
-	} `json:"distance,omitempty"`
-	Threshold struct {
-		Thresholds []struct {
-			Threshold float64 `json:"threshold,omitempty"`
-			StopLoss  float64 `json:"stopLoss,omitempty"`
-		} `json:"thresholds,omitempty"`
-		Units         string `json:"units,omitempty"`
-		StopPriceBase string `json:"stopPriceBase,omitempty"`
-	} `json:"threshold,omitempty"`
+	Distance *DistanceTrailingStopLoss `json:"distance,omitempty"` // Configuration TSL en fonction de la distance
 }
 
 type Expiration struct {

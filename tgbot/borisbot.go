@@ -378,7 +378,7 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 func (tgBot *TgBot) setStrategy(b *gotgbot.Bot, ctx *ext.Context, b2 bool) error {
 	// Create the inline keyboard buttons
 	// list of volumes
-	strategies := []string{"3TP", "TP1", "TP2"}
+	strategies := []string{"3TP", "TP1", "TP2", "TP1_ONLY", "TP2_ONLY", "TP3_ONLY"}
 	// generate inlineKeyboard base on strategies
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
 	for _, strategy := range strategies {
