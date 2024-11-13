@@ -27,7 +27,7 @@ func calculatePips(openPrice float64, closePrice float64, symbol string) float64
 // caculate volume size for trade request, minimum volume is 0.01
 func (tgBot *TgBot) calculateVolumeSizeForTradeRequest(stopLossDistancePips float64, riskPercentage float64, accountBalance float64) float64 {
 	// Calcul du risque en dollar
-	riskInDollar := accountBalance * riskPercentage
+	riskInDollar := accountBalance * (riskPercentage / 100)
 	// Calcul du volume en fonction du risque en dollar
 	volume := riskInDollar / stopLossDistancePips
 	// Volume minimum = 0.01
@@ -52,10 +52,20 @@ func getCurrencyPointSize(symbol string) float64 {
 		"EURCHF":   0.0001,
 		"XAUUSD":   0.01,  // GOLD
 		"XAGUSD":   0.001, // SILVER
-		"BTCUSD":   0.01,  // Bitcoin
+		"BTCUSD":   1,     // Bitcoin
 		"ETHUSD":   0.01,  // Ethereum
 		"USOUSD":   0.01,  // WTI Crude Oil
 		"BrentUSD": 0.01,  // Brent Crude Oil
+
+	}
+	// in case symbole contains suffix like XAUUSD-STD or XAUUSD-ECN
+	if currencyPointSizes[symbol] == 0 {
+		for key, value := range currencyPointSizes {
+			if key == symbol[:len(key)] {
+				return value
+			}
+		}
+
 	}
 	return currencyPointSizes[symbol]
 }
@@ -141,7 +151,7 @@ func (tgBot *TgBot) GetTradeRequestPossibleLoss(request *TradeRequest, price flo
 		if request.TakeProfit2 > 0 {
 			pipsToStopLoss = pipsToStopLoss + calculatePips(entryPrice, request.StopLoss, request.Symbol)
 		}
-		if request.TakeProfit3 > 0 {
+		if request.TakeProfit3 > 0 && strategy == "3TP" {
 			pipsToStopLoss = pipsToStopLoss + calculatePips(entryPrice, request.StopLoss, request.Symbol)
 		}
 	}

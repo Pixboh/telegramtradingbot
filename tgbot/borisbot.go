@@ -391,13 +391,14 @@ func (tgBot *TgBot) setDailyProfitGoalCallback(b *gotgbot.Bot, ctx *ext.Context)
 
 func (tgBot *TgBot) setRiskPercentage(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
 	// Définir une liste de pourcentages de risque disponibles
-	percentages := []float64{0.5, 1, 1.5, 2, 3, 5}
-
+	percentages := []float64{0.5, 1, 1.5, 2, 3, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50}
+	balance := tgBot.getAccountBalance()
 	// Générer un clavier inline basé sur les pourcentages
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
 	for _, percentage := range percentages {
 		currentRiskPercentage := tgBot.RedisClient.GetRiskPercentage() // Obtenir le pourcentage actuel depuis Redis
 		text := fmt.Sprintf("%.2f%%", percentage)
+		text = text + " (" + fmt.Sprintf("%.2f", balance*percentage/100) + ")" // Ajouter le montant correspondant
 		if currentRiskPercentage == percentage {
 			text = text + " ✅" // Ajouter une coche si le pourcentage est actuellement sélectionné
 		}
@@ -462,6 +463,19 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	// daily profit goal
 	text = text + "\nDaily Profit Goal 💰: " + fmt.Sprintf("%.2f", tgBot.RedisClient.GetDailyProfitGoal())
 	text = text + "\n-------------------------"
+	// risk percentage
+	text = text + "\nRisk Percentage 🎲: " + fmt.Sprintf("%.2f", tgBot.RedisClient.GetRiskPercentage()) + "%" + " (" + fmt.Sprintf("%.2f", tgBot.getAccountBalance()*tgBot.RedisClient.GetRiskPercentage()/100) + ")"
+	text = text + "\n-------------------------"
+	// daily loss limit
+	text = text + "\nDaily Loss Limit 💸: " + fmt.Sprintf("%.2f", tgBot.RedisClient.GetDailyLossLimitPercentage()) + "%" + " (" + fmt.Sprintf("%.2f", tgBot.getAccountBalance()*tgBot.RedisClient.GetDailyLossLimitPercentage()/100) + ")"
+	text = text + "\n-------------------------"
+	// max open trades
+	text = text + "\nMax Open Trades 📈: " + fmt.Sprintf("%d", tgBot.RedisClient.GetMaxOpenTrades())
+	text = text + "\n-------------------------"
+	// max similar trades
+	text = text + "\nMax Similar Trades 📈: " + fmt.Sprintf("%d", tgBot.RedisClient.GetMaxSimilarTrades())
+	text = text + "\n-------------------------"
+
 	// meta apî account info
 	// name
 	information, err := tgBot.getAccountInformation()
@@ -474,16 +488,17 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	text = text + "\nCurrent Profit 💰: " + fmt.Sprintf("%.2f", tgBot.getTodayProfit()) + " " + information.Currency
 	text = text + "\n-------------------------"
 
-	// balance
-	text = text + "\nAccount Balance 💰: " + fmt.Sprintf("%.2f", information.Balance) + " " + information.Currency
+	//  open balance
+	text = text + "\nAccount Open Balance 💰: " + fmt.Sprintf("%.2f", tgBot.getAccountBalance()) + " " + information.Currency
+	text = text + "\n-------------------------"
+	// Account current balance
+	text = text + "\nAccount Current Balance 💰: " + fmt.Sprintf("%.2f", information.Equity) + " " + information.Currency
 	text = text + "\n-------------------------"
 	// broker
 	text = text + "\nBroker 🏦: " + information.Broker
 	text = text + "\n-------------------------"
 
 	ctx.EffectiveMessage.Reply(b, text, nil)
-	// channels
-	tgBot.paginateChannels(b, ctx, -1)
 	// set chat id
 	chatId := ctx.EffectiveChat.Id
 	tgBot.RedisClient.SetChatId(chatId)
