@@ -6,6 +6,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"strconv"
 	"tdlib/custom_request"
+	"time"
 )
 
 var ctx = context.Background()
@@ -491,14 +492,50 @@ func (rdClient *RedisClient) SetChannelVolume(i int, volume float64) {
 }
 
 func (rdClient *RedisClient) SetAccountBalance(balance float64) {
-	rdClient.Rdb.Set(ctx, "account_balance", balance, 0)
+	// save balance and day YYYY-MM-DD
+	today := time.Now().Format("2006-01-02")
+	// save date and balance
+	rdClient.Rdb.HSet(ctx, "account_balance", today, balance)
 }
 
 func (rdClient *RedisClient) GetAccountBalance() float64 {
-	balance := rdClient.Rdb.Get(ctx, "account_balance")
+	// get balance of the day
+	today := time.Now().Format("2006-01-02")
+	balance := rdClient.Rdb.HGet(ctx, "account_balance", today)
 	if balance.Err() != nil {
 		return 0
 	}
 	balanceFloat, _ := strconv.ParseFloat(balance.Val(), 64)
 	return balanceFloat
+}
+
+func (rdClient *RedisClient) GetDailyLossLimitPercentage() float64 {
+	loss := rdClient.Rdb.Get(ctx, "daily_loss_limit_percentage")
+	if loss.Err() != nil {
+		return 20
+	}
+	lossFloat, _ := strconv.ParseFloat(loss.Val(), 64)
+	return lossFloat
+}
+
+func (rdClient *RedisClient) SetDailyLossLimitPercentage(loss float64) {
+	rdClient.Rdb.Set(ctx, "daily_loss_limit_percentage", loss, 0)
+}
+
+func (rdClient *RedisClient) GetMaxSimilarTrades() int {
+	defaultMaxSimilarTrades := 2
+	max := rdClient.Rdb.Get(ctx, "max_similar_trades")
+	if max.Err() != nil {
+		return defaultMaxSimilarTrades
+	}
+	maxInt, _ := strconv.Atoi(max.Val())
+	// default to one
+	if maxInt == 0 {
+		return defaultMaxSimilarTrades
+	}
+	return maxInt
+}
+
+func (rdClient *RedisClient) SetMaxSimilarTrades(max int) {
+	rdClient.Rdb.Set(ctx, "max_similar_trades", max, 0)
 }

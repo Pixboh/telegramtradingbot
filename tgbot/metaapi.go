@@ -8,6 +8,7 @@ import (
 	"github.com/gotd/td/tg"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -146,18 +147,34 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			tgBot.sendMessage("❌ Daily profit goal reached", 0)
 			return nil, nil, errors.New("daily profit goal reached")
 		}
+		// check if reach loss limit
+		if tgBot.reachedDailyLossLimit() {
+			log.Printf("Reached daily loss limit")
+			tgBot.sendMessage("❌ Daily loss limit reached", 0)
+			return nil, nil, errors.New("daily loss limit reached")
+		}
+		// check symbol trend
+
 		// get current position
 		positions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, metaApiAccountId, metaApiToken)
 		if err != nil {
 			return nil, nil, err
 		}
-		// check if max trades position reached
-		maxOpenedTrade := tgBot.RedisClient.GetMaxOpenTrades()
-		if len(positions) > 0 && len(positions) > maxOpenedTrade {
-			log.Printf("Max opened trades : %d reached", maxOpenedTrade)
-			tgBot.sendMessage("❌ Skipping signal. Max opened trades : "+strconv.Itoa(maxOpenedTrade)+" reached", 0)
-			return nil, nil, errors.New("max opened trades reached")
+		// check for similar trades ongoing
+		maxSimilarTrades := tgBot.RedisClient.GetMaxSimilarTrades()
+		if tgBot.CountSimilarTrades(positions, *tradeRequest) >= maxSimilarTrades {
+			log.Printf("Similar trade already exist")
+			tgBot.sendMessage("❌ Similar trade already exist", 0)
+			return nil, nil, errors.New("similar trade already exist")
 		}
+
+		// check if max trades position reached
+		//	maxOpenedTrade := tgBot.RedisClient.GetMaxOpenTrades()
+		//	if len(positions) > 0 && len(positions) > maxOpenedTrade {
+		//		log.Printf("Max opened trades : %d reached", maxOpenedTrade)
+		//		tgBot.sendMessage("❌ Skipping signal. Max opened trades : "+strconv.Itoa(maxOpenedTrade)+" reached", 0)
+		//		return nil, nil, errors.New("max opened trades reached")
+		//	}
 
 		tradeRequest = setTradeRequestEntryZone(tradeRequest)
 		if !tgBot.RedisClient.IsSymbolExist(tradeRequest.Symbol) {
@@ -179,8 +196,10 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		var currentPrice float64
 		if tradeRequest.ActionType == "ORDER_TYPE_BUY" {
 			currentPrice = priceResponse.Ask
+			// if symbol trend is bearish and action is buy
 		} else if tradeRequest.ActionType == "ORDER_TYPE_SELL" {
 			currentPrice = priceResponse.Bid
+			// if symbol trend is bullish and action is sell
 		} else {
 			// Handle other action types or return an error
 			log.Println("Unsupported action type")
@@ -191,6 +210,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		balance := tgBot.getAccountBalance()
 		volume := tgBot.GetTradingDynamicVolume(tradeRequest, currentPrice, balance, int(input.ChannelID))
 		tradeRequest.Volume = volume
+
 		// avoid dboule trade
 		if tgBot.RedisClient.IsTradeKeyExist(tradeRequest.GenerateTradeRequestKey()) {
 			log.Printf("Trade already placed")
@@ -205,7 +225,16 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			tgBot.sendMessage("❌ Trade already exist", 0)
 			return nil, nil, errors.New("trade already exist")
 		}
-		errTrade := validateTradeValue(tradeRequest, strategy)
+		// check if ongoing trades
+		if tgBot.CheckIfTradeCanFit(positions, *tradeRequest, currentPrice) {
+			log.Printf("Trade can fit")
+		} else {
+			log.Printf("Trade can't fit")
+			tgBot.sendMessage("❌ Trade can't fit", 0)
+			return nil, nil, errors.New("trade can't fit")
+		}
+
+		errTrade := tgBot.validateTradeValue(tradeRequest, strategy)
 		// check if the same trade already exist
 
 		// log fixed trade object
@@ -484,6 +513,59 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		return nil, &tradeResponses, nil
 	}
 	return nil, nil, errors.New("trade not placed")
+}
+
+func (tgBot *TgBot) CheckIfTradeCanFit(positions []MetaApiPosition, request TradeRequest, currentPrice float64) bool {
+	// calculate total loss possible on all trades
+	totalLoss := 0.0
+	for _, position := range positions {
+		stopLoss := position.StopLoss
+		entryPrice := position.OpenPrice
+		volume := position.Volume
+		// stopLoss distance in pips
+		pipsToStopLoss := calculatePips(entryPrice, stopLoss, position.Symbol)
+		// use absolute value
+		if pipsToStopLoss < 0 {
+			pipsToStopLoss = pipsToStopLoss * -1
+		}
+		// calculate loss
+		loss := pipsToStopLoss * volume
+		totalLoss += loss
+	}
+	// get trading dynamic volume
+	// get possible loss on the trade request
+	possibleLoss := tgBot.GetTradeRequestPossibleLoss(&request, currentPrice)
+	// check if possible loss is less than total loss
+	totalLoss = totalLoss + possibleLoss
+	lossLimitamount := tgBot.getDailyLossLimitAmount()
+	if totalLoss > lossLimitamount {
+		return false
+	}
+	return true
+}
+
+// trade are similar if they have the same symbol and the same direction and trade time is less than 1 hour
+func (tgBot *TgBot) CountSimilarTrades(positions []MetaApiPosition, request TradeRequest) int {
+	count := 0
+	for _, position := range positions {
+		// check if the trade is less than 1 hour
+		tradeTimeString := position.Time
+		tradeTimeTime, err := time.Parse(time.RFC3339, tradeTimeString)
+		if err != nil {
+			log.Printf("Error parsing trade time: %v", err)
+			continue
+		}
+		positionType := "POSITION_TYPE_BUY"
+		if request.ActionType == "ORDER_TYPE_SELL" {
+			positionType = "POSITION_TYPE_SELL"
+		}
+		if position.Symbol == request.Symbol && position.Type == positionType {
+			if time.Since(tradeTimeTime).Hours() < 2 {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func (tgBot *TgBot) doSlToEntryPrice(positions []MetaApiPosition) error {
@@ -896,7 +978,7 @@ func setTradeRequestEntryZone(request *TradeRequest) *TradeRequest {
 	return request
 }
 
-func validateTradeValue(r *TradeRequest, strategy string) error {
+func (tgBot *TgBot) validateTradeValue(r *TradeRequest, strategy string) error {
 	// check if takeprofit1 is set
 
 	// check if volume is set
@@ -913,21 +995,14 @@ func validateTradeValue(r *TradeRequest, strategy string) error {
 	}
 	// value coerence check
 	// if buy
-	if r.TakeProfit1 == -1 {
-		if strategy == "TP2" {
-			if r.TakeProfit2 == 0 {
-				r.TakeProfit2 = -1
-			}
-		}
-		if strategy == "3TP" || strategy == "TP3" {
-			if r.TakeProfit2 == 0 {
-				r.TakeProfit2 = -1
-			}
-			if r.TakeProfit3 == 0 {
-				r.TakeProfit3 = -1
-			}
-		}
+	if strategy == "TP1" {
+		r.TakeProfit2 = 0
+		r.TakeProfit3 = 0
 	}
+	if strategy == "TP2" {
+		r.TakeProfit3 = 0
+	}
+
 	return nil
 
 }
@@ -1059,6 +1134,47 @@ type MetaApiPosition struct {
 	CurrentTickValue            float64 `json:"currentTickValue,omitempty"`
 	UpdateSequenceNumber        float64 `json:"updateSequenceNumber,omitempty"`
 	State                       string  `json:"state,omitempty"`
+}
+
+// lite position version for IA
+type MetaApiPositionLite struct {
+	ID         string  `json:"id"`
+	OpenPrice  float64 `json:"openPrice,omitempty"`
+	StopLoss   float64 `json:"stopLoss,omitempty"`
+	TakeProfit float64 `json:"takeProfit,omitempty"`
+	Profit     float64 `json:"profit,omitempty"`
+	ChannelId  int     `json:"channelId,omitempty"`
+}
+
+// convert metaApiPosition to MetaApiPositionLite
+func (p *MetaApiPosition) ToMetaApiPositionLite() MetaApiPositionLite {
+	out := MetaApiPositionLite{
+		ID:         p.ID,
+		OpenPrice:  p.OpenPrice,
+		StopLoss:   p.StopLoss,
+		TakeProfit: p.TakeProfit,
+		Profit:     p.Profit,
+	}
+	if p.ClientID != "" {
+		c_id := extractChannelIDFromClientId(p.ClientID)
+		out.ChannelId = c_id
+	}
+	if out.ChannelId == 0 {
+		if p.BrokerComment != "" {
+			c_id := extractChannelIDFromClientId(p.BrokerComment)
+			out.ChannelId = c_id
+		}
+	}
+	return out
+}
+
+// convert list of MetaApiPosition to MetaApiPositionLite
+func convertMetaApiPositionToMetaApiPositionLite(positions []MetaApiPosition) []MetaApiPositionLite {
+	var result []MetaApiPositionLite
+	for _, p := range positions {
+		result = append(result, p.ToMetaApiPositionLite())
+	}
+	return result
 }
 
 type MetaApiTradeRequest struct {
@@ -1363,6 +1479,64 @@ func (tgBot *TgBot) reachedProfitGoal() bool {
 	return false
 }
 
+// bot reached daily loss limit
+func (tgBot *TgBot) reachedDailyLossLimit() bool {
+	balance := tgBot.getAccountBalance()
+	// limit percentage
+	lossLimitPercentage := tgBot.RedisClient.GetDailyLossLimitPercentage()
+	// daily profit
+	profit := tgBot.getTodayProfit()
+	// profit is negative on loss
+	if profit < 0 {
+		// calculate loss percentage
+		lossPercentage := (profit / balance) * 100
+		// use absolute value
+		lossPercentage = math.Abs(lossPercentage)
+		if lossPercentage >= lossLimitPercentage {
+			return true
+		}
+	}
+	return false
+}
+
+// get  daily loss limit amount
+func (tgBot *TgBot) getDailyLossLimitAmount() float64 {
+	balance := tgBot.getAccountBalance()
+	// limit percentage
+	lossLimitPercentage := tgBot.RedisClient.GetDailyLossLimitPercentage()
+	// calculate loss amount
+	lossAmount := balance * lossLimitPercentage / 100
+	return lossAmount
+}
+
+// can support loss amount. check balance, loss limit and daily loss, profit goal
+func (tgBot *TgBot) canSupportLossAmount(newLossAmount float64) bool {
+	// daily profit
+	balance := tgBot.getAccountBalance()
+	if balance == 0 {
+		return false
+	}
+	profit := tgBot.getTodayProfit()
+	if profit < 0 {
+		// get balance
+		// limit percentage
+		lossLimitPercentage := tgBot.RedisClient.GetDailyLossLimitPercentage()
+		// calculate loss percentage
+		lossPercentage := (profit - newLossAmount) / balance * 100
+		if lossPercentage <= lossLimitPercentage {
+			return true
+		}
+	}
+	dailyProfitGoal := tgBot.RedisClient.GetDailyProfitGoal()
+	if dailyProfitGoal > 0 {
+		profitMinusNewLoss := profit - newLossAmount
+		if profitMinusNewLoss >= dailyProfitGoal {
+			return true
+		}
+	}
+	return false
+}
+
 func extractChannelIDFromClientId(id string) int {
 	re := regexp.MustCompile(`^[^@]+@(\d+)_`)
 	matches := re.FindStringSubmatch(id)
@@ -1522,8 +1696,14 @@ func (tgBot *TgBot) getTodayPositions() ([]MetaApiPosition, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return positions, nil
+	// exclud positions of type DEAL_TYPE_BALANCE
+	var filteredPositions []MetaApiPosition
+	for _, position := range positions {
+		if position.Type != "DEAL_TYPE_BALANCE" {
+			filteredPositions = append(filteredPositions, position)
+		}
+	}
+	return filteredPositions, nil
 }
 
 func extractMessageIdFromClientId(id string) int {

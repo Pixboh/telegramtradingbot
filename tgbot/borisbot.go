@@ -45,6 +45,8 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	// set a volume for each channel select_chan_volume
 	dispatcher.AddHandler(handlers.NewCommand("set_channel_volume", tgBot.setChannelVolumeCallback))
 	dispatcher.AddHandler(handlers.NewCommand("set_daily_profit_goal", tgBot.setDailyProfitGoalCallback))
+	// daily loss limit
+	dispatcher.AddHandler(handlers.NewCommand("set_daily_loss_limit_percentage", tgBot.setDailyLossLimitPercentageCallback))
 	dispatcher.AddHandler(handlers.NewCommand("set_symbols", tgBot.setSymbolsCallback))
 	// set channel breakeven
 	dispatcher.AddHandler(handlers.NewCommand("set_channel_breakeven", tgBot.setChannelBreakevenCallback))
@@ -53,6 +55,8 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("set_risk", tgBot.setRiskPercentageCallback))
 	// maximum open trades
 	dispatcher.AddHandler(handlers.NewCommand("set_max_open_trades", tgBot.setMaxOpenTradesCallback))
+	// set max similar trades
+	dispatcher.AddHandler(handlers.NewCommand("set_maximum_similar_trades", tgBot.setMaxSimilarTradesCallback))
 
 	dispatcher.AddHandler(handlers.NewCallback(nil, tgBot.handleCallback))
 
@@ -120,10 +124,121 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 			Command:     "set_channel_volume",
 			Description: "Set channel volume",
 		},
+		{
+			Command:     "set_daily_loss_limit_percentage",
+			Description: "Set daily loss limit percentage",
+		},
+		{
+			Command:     "set_maximum_similar_trades",
+			Description: "Set maximum similar trades",
+		},
 	}, nil)
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
+}
+
+func (tgBot *TgBot) setMaxSimilarTradesCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setMaxSimilarTrades(b, ctx, false)
+}
+
+func (tgBot *TgBot) setMaxSimilarTrades(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// Create the inline keyboard buttons
+	// list of volumes
+	maxSimilarTrades := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	// generate inlineKeyboard base on volumes
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	for _, maxSimilarTrade := range maxSimilarTrades {
+		// current volule
+		currentMaxSimilarTrade := tgBot.RedisClient.GetMaxSimilarTrades()
+		// limit to 2
+		text := fmt.Sprintf("%d", maxSimilarTrade)
+		if currentMaxSimilarTrade == maxSimilarTrade {
+			text = text + " ✅"
+		}
+		inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("max_similar_trades_%d", maxSimilarTrade),
+			},
+		})
+	}
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the maximum similar trades:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the maximum similar trades:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (tgBot *TgBot) setDailyLossLimitPercentageCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setDailyLossLimitPercentage(b, ctx, false)
+}
+
+// amount in eur to set as daily loss limit
+func (tgBot *TgBot) setDailyLossLimitPercentage(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// Create the inline keyboard buttons
+	// list of volumes
+	balance := tgBot.getAccountBalance()
+	lossLimits := []float64{0.01, 0.1, 1, 2, 3, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50}
+	// generate inlineKeyboard base on volumes
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	for _, lossLimit := range lossLimits {
+		// current volule
+		currentLossLimit := tgBot.RedisClient.GetDailyLossLimitPercentage()
+		// limit to 2
+		text := fmt.Sprintf("%.2f%%", lossLimit)
+		text = text + " (" + fmt.Sprintf("%.2f", balance*lossLimit/100) + ")"
+		if currentLossLimit == lossLimit {
+			text = text + " ✅"
+		}
+		inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("daily_loss_limit_percentage_%f", lossLimit),
+			},
+		})
+	}
+
+	replyMarkup := gotgbot.InlineKeyboardMarkup{InlineKeyboard: inlineKeyboard}
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the daily loss limit:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the daily loss limit:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (tgBot *TgBot) setMaxOpenTradesCallback(b *gotgbot.Bot, ctx *ext.Context) error {
@@ -1054,6 +1169,51 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 
 		// Mettre à jour l'affichage
 		return tgBot.setMaxOpenTrades(b, ctx, true)
+	}
+	// daily loss limit percentage
+	if strings.HasPrefix(data, "daily_loss_limit_percentage_") {
+		dailyLossLimitPercentageStr := strings.TrimPrefix(data, "daily_loss_limit_percentage_")
+		dailyLossLimitPercentage, err := strconv.ParseFloat(dailyLossLimitPercentageStr, 64)
+		if err != nil {
+			return fmt.Errorf("failed to parse daily loss limit percentage: %w", err)
+		}
+
+		// Stocker le pourcentage de perte journalière limite dans Redis
+		tgBot.RedisClient.SetDailyLossLimitPercentage(dailyLossLimitPercentage)
+
+		// Répondre à l'utilisateur
+		_, err = ctx.CallbackQuery.Answer(b, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Daily loss limit percentage updated successfully!",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to answer callback query: %w", err)
+		}
+
+		// Mettre à jour l'affichage
+		return tgBot.setDailyLossLimitPercentage(b, ctx, true)
+	}
+
+	// set max similar trades
+	if strings.HasPrefix(data, "max_similar_trades_") {
+		maxSimilarTradesStr := strings.TrimPrefix(data, "max_similar_trades_")
+		maxSimilarTrades, err := strconv.Atoi(maxSimilarTradesStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse max similar trades: %w", err)
+		}
+
+		// Stocker le nombre de trades similaires max dans Redis
+		tgBot.RedisClient.SetMaxSimilarTrades(maxSimilarTrades)
+
+		// Répondre à l'utilisateur
+		_, err = ctx.CallbackQuery.Answer(b, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Max similar trades updated successfully!",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to answer callback query: %w", err)
+		}
+
+		// Mettre à jour l'affichage
+		return tgBot.setMaxSimilarTrades(b, ctx, true)
 	}
 
 	switch ctx.CallbackQuery.Data {

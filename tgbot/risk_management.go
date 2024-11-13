@@ -17,6 +17,10 @@ func calculateProfitPriceInDollar(openPrice float64, closeProfit float64, takePr
 func calculatePips(openPrice float64, closePrice float64, symbol string) float64 {
 	currencyPointSize := getCurrencyPointSize(symbol)
 	pips := (closePrice - openPrice) / currencyPointSize
+	// use absolute value
+	if pips < 0 {
+		pips = math.Abs(pips)
+	}
 	return pips
 }
 
@@ -119,4 +123,29 @@ func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64
 	}
 
 	return volume
+}
+
+// get traderequest possible loss in usd
+func (tgBot *TgBot) GetTradeRequestPossibleLoss(request *TradeRequest, price float64) float64 {
+	// here we will evaluate the risk management of the trade request
+	entryPrice := price
+	volume := request.Volume
+	strategy := tgBot.RedisClient.GetStrategy()
+	// stopLoss distance in pips
+	pipsToStopLoss := 0.0
+	// stack stoploss distance base on TPs if tp positive
+	if request.TakeProfit1 > 0 {
+		pipsToStopLoss = pipsToStopLoss + calculatePips(entryPrice, request.StopLoss, request.Symbol)
+	}
+	if strategy == "3TP" || strategy == "TP2" {
+		if request.TakeProfit2 > 0 {
+			pipsToStopLoss = pipsToStopLoss + calculatePips(entryPrice, request.StopLoss, request.Symbol)
+		}
+		if request.TakeProfit3 > 0 {
+			pipsToStopLoss = pipsToStopLoss + calculatePips(entryPrice, request.StopLoss, request.Symbol)
+		}
+	}
+	// loss calculation
+	possibleLoss := pipsToStopLoss * volume
+	return possibleLoss
 }

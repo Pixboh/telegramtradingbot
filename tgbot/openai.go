@@ -1,11 +1,13 @@
 package tgbot
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/sashabaranov/go-openai"
 	"log"
+	"os"
 	"strings"
 )
 
@@ -305,7 +307,7 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				{
 					Role: "user",
 					Content: "Voici les different update types qui existe : TP1_HIT , TP2_HIT, TP3_HIT, TP4_HIT ," +
-						" STOPLOSS_HIT, CLOSE_TRADE, MODIFY_STOPLOSS , SL_TO_ENTRY_PRICE",
+						" STOPLOSS_HIT, CLOSE_TRADE, MODIFY_STOPLOSS , SL_TO_ENTRY_PRICE , SECURE_PROFIT",
 				},
 				{
 					Role:    "assistant",
@@ -578,12 +580,22 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 				},
 				{
 					Role:    "user",
-					Content: "Exemple: So easy! Non stop profit bro, our sell trade instant hit our 1st tp again 50pips+🤣🎊\n\nclose half profit & set breakeven now  ",
+					Content: "Exemple: So easy! Non stop profit bro, our sell trade instant hit our 1st tp again 50pips+🤣🎊\n\n ",
 				},
 				{
 					Role: "assistant",
 					Content: `{
   "updateType": "SL_TO_ENTRY_PRICE"
+}`,
+				},
+				{
+					Role:    "user",
+					Content: "Let’s close some profit!",
+				},
+				{
+					Role: "assistant",
+					Content: `{
+  "updateType": "SECURE_PROFIT"
 }`,
 				},
 				{
@@ -627,4 +639,79 @@ func GptParseUpdateMessage(message string, apiKey string) (*TradeUpdateRequest, 
 	// Afficher l'objet TradeRequest
 	fmt.Printf("TradeRequest struct: %+v\n", tradeRequest)
 	return &tradeRequest, errJson
+}
+func extractText(fichier string) (string, error) {
+	// Ouvre le fichier
+	file, err := os.Open(fichier)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	// Utilise un StringBuilder pour concaténer le texte
+	var contenu string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		contenu += scanner.Text() + "\n" // Ajoute une nouvelle ligne après chaque ligne
+	}
+
+	// Vérifie les erreurs de lecture du fichier
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	return contenu, nil
+}
+
+// get symbol trend from openai
+type Trend struct {
+	Trend string `json:"trend"`
+}
+
+func (tgBot *TgBot) GetSymbolTrend(symbol string) (*Trend, error) {
+	clientOpenApi := openai.NewClient(tgBot.AppConfig.OpenAiToken)
+	prompt := `
+	Analyse les informations actuelles du marché en ligne (comme les sites d’actualités financières et les analyses techniques) pour déterminer si la tendance pour la journée et les 3 derniers jours est principalement à la hausse ou à la baisse. 
+	Prends en compte les indicateurs techniques communs (comme la moyenne mobile, le RSI, MACD) et toute tendance notable observée dans les actualités récentes, ou les annonces économiques significatives pouvant influencer le marché. 
+	Fournis une réponse concise en JSON avec le format suivant :
+	Entrée : { "currency_pair": "` + symbol + `" }
+	Sortie attendue : { "trend": "upward" } ou { "trend": "downward" }
+	`
+	resp, err := clientOpenApi.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: openai.GPT4Turbo20240409,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: "Vous êtes un analyste de marché financier, fournissant des informations et analyses précises sur les tendances du marché.",
+				},
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: prompt,
+				},
+			}})
+	if err != nil {
+		fmt.Printf("ChatCompletion error: %v\n", err)
+		return nil, err
+	} else {
+		// Afficher la réponse du modèle
+		fmt.Println("Réponse du modèle :", resp.Choices[0].Message.Content)
+	}
+
+	// Extraction de la réponse
+	parsedContent := resp.Choices[0].Message.Content
+
+	// Initialiser un objet Trend
+	var trend Trend
+
+	// Parser la réponse JSON dans l'objet Trend
+	errJson := json.Unmarshal([]byte(parsedContent), &trend)
+	if errJson != nil {
+		return nil, errJson
+	}
+
+	// Afficher l'objet Trend
+	fmt.Printf("Trend struct: %+v\n", trend)
+	return &trend, errJson
 }

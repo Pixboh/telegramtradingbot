@@ -259,9 +259,10 @@ func (tgBot *TgBot) updateDailyInfo() {
 		return
 	}
 	balance := information.Balance
-	// save account balance
-	tgBot.RedisClient.SetAccountBalance(balance)
-
+	// save account balance if 0
+	if tgBot.getAccountBalance() == 0 {
+		tgBot.RedisClient.SetAccountBalance(balance)
+	}
 }
 
 // get account balance
@@ -273,7 +274,7 @@ func (tgBot *TgBot) getAccountBalance() float64 {
 		if err != nil {
 			return 0
 		}
-		balance = information.Balance
+		balance = information.Equity
 		// save account balance
 		tgBot.RedisClient.SetAccountBalance(balance)
 	}
