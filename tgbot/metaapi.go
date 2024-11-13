@@ -574,7 +574,7 @@ func (tgBot *TgBot) doSlToEntryPrice(positions []MetaApiPosition) error {
 	// generate a telegram response for the bot
 	botMessage := fmt.Sprintf("✅ SL to Entry Price 🎉")
 	for _, position := range positions {
-		newStopLoss := calculateNewStopLossPriceForBreakeven(position.OpenPrice, position.Type)
+		newStopLoss := calculateNewStopLossPriceForBreakeven(position.OpenPrice, position.Type, position.Symbol)
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		metaApiRequest := MetaApiTradeRequest{
 			ActionType: "POSITION_MODIFY",
@@ -657,7 +657,7 @@ func (tgBot *TgBot) doBreakeven(currentMessagePositions []MetaApiPosition, tpHit
 		// safe
 		entryPrice = position.OpenPrice
 		// add a litle margin
-		newStopLoss := calculateNewStopLossPriceForBreakeven(position.OpenPrice, position.Type)
+		newStopLoss := calculateNewStopLossPriceForBreakeven(position.OpenPrice, position.Type, position.Symbol)
 		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 		_ = TrailingStopLoss{
 			Distance: &DistanceTrailingStopLoss{
@@ -1355,8 +1355,9 @@ WantedBy=multi-user.target
 ~
 */
 
-func calculateNewStopLossPriceForBreakeven(entryPrice float64, actionType string) float64 {
-	margin := 0.1
+func calculateNewStopLossPriceForBreakeven(entryPrice float64, actionType string, symbol string) float64 {
+	pointSize := getCurrencyPointSize(symbol)
+	margin := pointSize * 2
 	pips := 0.0
 	// calculate new stop loss
 	newStopLoss := 0.0
