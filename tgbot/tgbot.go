@@ -53,7 +53,7 @@ func (tgBot *TgBot) Start() {
 	defer cancel()
 	// run cron
 	c := cron.New()
-	c.AddFunc("@every 1m", tgBot.checkCurrentPositions) // Adapter le délai
+	c.AddFunc("@every 20s", tgBot.checkCurrentPositions) // Adapter le délai
 	// cron to run every day at 00:00
 	c.AddFunc("0 0 * * *", tgBot.updateDailyInfo)
 	// TODO remove line

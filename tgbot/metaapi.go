@@ -372,7 +372,6 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 						/**
 						❌ Trade not placed
 						🏀 Channel : @channel
-						 Buy EURUSD
 						 Entry Price: 1.1234
 						 Stop Loss: 1.1200
 						 Take Profit: 1.1300
@@ -1134,6 +1133,7 @@ type MetaApiPosition struct {
 	CurrentTickValue            float64 `json:"currentTickValue,omitempty"`
 	UpdateSequenceNumber        float64 `json:"updateSequenceNumber,omitempty"`
 	State                       string  `json:"state,omitempty"`
+	OriginalComment             string  `json:"originalComment,omitempty"`
 }
 
 // lite position version for IA
@@ -1166,6 +1166,16 @@ func (p *MetaApiPosition) ToMetaApiPositionLite() MetaApiPositionLite {
 		}
 	}
 	return out
+}
+
+func (p *MetaApiPosition) isBreakevenSetted() bool {
+	if p.Type == "POSITION_TYPE_BUY" {
+		return p.StopLoss >= p.OpenPrice
+	}
+	if p.Type == "POSITION_TYPE_SELL" {
+		return p.StopLoss <= p.OpenPrice
+	}
+	return false
 }
 
 // convert list of MetaApiPosition to MetaApiPositionLite
@@ -1391,24 +1401,27 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	}
 	// check for tp2 without tp1 and breakeven not setted
 	for _, position := range latestPositions {
-		tpNumber := extractTPFromClientId(position.ClientID)
-		if tpNumber == 2 && isBreakevenSetted(&position) == false {
-			clientId := position.ClientID
-			// check if tp1 is containing
-			messageId := extractMessageIdFromClientId(clientId)
-			tp1Position := getPositionByMessageIdAndTP(latestPositions, messageId, 1)
-			channelID := extractChannelIDFromClientId(clientId)
-			if tp1Position == nil {
-				// trigger tp1_hit and breakeven
-				messagePositions := getPositionsByMessageId(latestPositions, messageId)
-				// trigger breakeven
-				// send message
-				if len(messagePositions) > 0 {
-					positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
-					// check if breakeven is setted for the channel on redis
-					if tgBot.RedisClient.IsBreakevenEnabled(channelID) {
-						tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
-						tgBot.doBreakeven(messagePositions, 1)
+		// is position is winning
+		if position.Profit > 0 {
+			tpNumber := extractTPFromClientId(position.ClientID)
+			if tpNumber > 2 && isBreakevenSetted(&position) == false {
+				clientId := position.ClientID
+				// check if tp1 is containing
+				messageId := extractMessageIdFromClientId(clientId)
+				tp1Position := getPositionByMessageIdAndTP(latestPositions, messageId, 1)
+				channelID := extractChannelIDFromClientId(clientId)
+				if tp1Position == nil {
+					// trigger tp1_hit and breakeven
+					messagePositions := getPositionsByMessageId(latestPositions, messageId)
+					// trigger breakeven
+					// send message
+					if len(messagePositions) > 0 {
+						positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+						// check if breakeven is setted for the channel on redis
+						if tgBot.RedisClient.IsBreakevenEnabled(channelID) {
+							tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
+							tgBot.doBreakeven(messagePositions, 1)
+						}
 					}
 				}
 			}
@@ -1449,6 +1462,49 @@ func (tgBot *TgBot) checkCurrentPositions() {
 
 			}
 
+		}
+	}
+
+	// if tp2 and tp3 position is making profit up to 60% take half profit to secure
+	// get all tp2 tp3 positions
+	for _, position := range latestPositions {
+		clientId := position.ClientID
+		if clientId == "" {
+			if position.OriginalComment != "" {
+				clientId = position.OriginalComment
+			} else {
+				continue
+			}
+		}
+		// FATAL MA NDEY FOFOU
+		tpNumber := extractTPFromClientId(clientId)
+		if tpNumber > 1 {
+			// check if position is making profit
+			if position.Profit > 0 && position.isBreakevenSetted() {
+				// check if position has take profit and we can split the volume
+				if position.TakeProfit > 0 && position.Volume > 0.02 {
+					// ensure that we've not already partially closed the position
+					if position.RealizedProfit == 0 {
+						// distance to take profit
+						distance := position.TakeProfit - position.OpenPrice
+						// check if current price is close to take profit by 60%
+						if position.CurrentPrice >= position.OpenPrice+distance*0.6 {
+							// close half profit
+							err := tgBot.doCloseHalfProfitTrade(position)
+							if err != nil {
+								//log
+								println("Error closing half profit trade: ", err)
+								// send message to user
+								tgBot.sendMessage("[AUTO] Error closing half profit trade : "+err.Error(), 0)
+								break
+							} else {
+								// send message to user
+								tgBot.sendMessage("[AUTO] Half profit trade closed", 0)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -1576,82 +1632,81 @@ func getLoosingPositions(positions []MetaApiPosition) []MetaApiPosition {
 // "positionId":"46648037",
 // "volume": 0.01
 // }' 'https://mt-client-api-v1.new-york.agiliumtrade.ai/users/current/accounts/865d3a4d-3803-486d-bdf3-a85679d9fad2/trade'
-func (tgBot *TgBot) doCloseHalfProfitTrade(positions []MetaApiPosition) error {
+func (tgBot *TgBot) doCloseHalfProfitTrade(position MetaApiPosition) error {
 	// get entry price base on positions
-	entryPrice := 0.0
 	tradeSuccess := false
-	// generate a telegram response for the bot
+	// if volume is lower than 0.02 skip
+	if position.Volume < 0.02 {
+		return errors.New("Volume is lower than 0.02. Can't close half profit")
+	}
 	botMessage := fmt.Sprintf("✅ Close half profit trade 🎉")
-	for _, position := range positions {
-		halfVolume := position.Volume / 2
-		//
-		if entryPrice == 0 {
-			// safe
-			entryPrice = position.OpenPrice
-		}
-		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
-		metaApiRequest := MetaApiTradeRequest{
-			ActionType: "POSITION_PARTIAL",
-			PositionID: &position.ID,
-			Volume:     &halfVolume,
-		}
-		// place all positions stop loss to their open price
-		for j := 0; j < 3; j++ {
-			trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, tgBot.AppConfig.MetaApiAccountID,
-				tgBot.AppConfig.MetaApiToken)
-			//
-			if err != nil {
-				log.Printf("Error placing trade: %v", err)
-				if j == 2 {
-					// send parsed error message from bot
-					// generate error message with reason
-					botErrorMessage := fmt.Sprintf("❌ Failed closing half profit trade")
-					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
-						fmt.Sprintf("❌ Error: %s", err))
-					tgBot.sendMessage(botMessage, int(positionMessageId))
-				}
-				continue
-			}
-			errorTrade := HandleTradeError(trade.NumericCode)
-			if tradeErr, ok := errorTrade.(*TradeError); ok {
-				if tradeErr.Type == Success {
-					if !tradeSuccess {
-						tradeSuccess = true
-					}
-					log.Printf("Trade update placed successfully: %v", trade)
-					// append message to inform user that we moved the stop loss to the entry price of this current tp
-					botMessage = fmt.Sprintf("%s\n%s", botMessage,
-						fmt.Sprintf("➡️Closed half profit trade"))
-					// append with values on next  line
-					botMessage = fmt.Sprintf("%s\n%s", botMessage,
-						fmt.Sprintf("➡️Position ID: %s\n", position.ID))
-					// get message to reply to // get chat message and reply to it
-					sendMessage, errM := tgBot.sendMessage(botMessage, int(positionMessageId))
-					if errM != nil {
-						return errM
-					}
-					if sendMessage != nil {
+	halfVolume := position.Volume / 2
+	// limit to 2 decimal
+	halfVolume = math.Round(halfVolume*100) / 100
 
+	//
+	positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+	metaApiRequest := MetaApiTradeRequest{
+		ActionType: "POSITION_PARTIAL",
+		PositionID: &position.ID,
+		Volume:     &halfVolume,
+	}
+	// place all positions stop loss to their open price
+	for j := 0; j < 3; j++ {
+		trade, err := executeTrade(tgBot.AppConfig.MetaApiEndpoint, metaApiRequest, tgBot.AppConfig.MetaApiAccountID,
+			tgBot.AppConfig.MetaApiToken)
+		//
+		if err != nil {
+			log.Printf("Error placing trade: %v", err)
+			if j == 2 {
+				// send parsed error message from bot
+				// generate error message with reason
+				botErrorMessage := fmt.Sprintf("❌ Failed closing half profit trade")
+				botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+					fmt.Sprintf("❌ Error: %s", err))
+				tgBot.sendMessage(botMessage, int(positionMessageId))
+			}
+			continue
+		}
+		errorTrade := HandleTradeError(trade.NumericCode)
+		if tradeErr, ok := errorTrade.(*TradeError); ok {
+			if tradeErr.Type == Success {
+				if !tradeSuccess {
+					tradeSuccess = true
+				}
+				log.Printf("Trade update placed successfully: %v", trade)
+				// append message to inform user that we moved the stop loss to the entry price of this current tp
+				botMessage = fmt.Sprintf("%s\n%s", botMessage,
+					fmt.Sprintf("➡️Closed half profit trade"))
+				// append with values on next  line
+				botMessage = fmt.Sprintf("%s\n%s", botMessage,
+					fmt.Sprintf("➡️Position ID: %s\n", position.ID))
+				// get message to reply to // get chat message and reply to it
+				sendMessage, errM := tgBot.sendMessage(botMessage, int(positionMessageId))
+				if errM != nil {
+					return errM
+				}
+				if sendMessage != nil {
+
+				}
+				break
+			} else {
+				// if last retry send error message
+				if j == 2 {
+					botErrorMessage := fmt.Sprintf("❌ Failed closing trade")
+					botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
+						fmt.Sprintf("❌ Error: %s", tradeErr.Description))
+					messageT, err := tgBot.sendMessage(botMessage, int(positionMessageId))
+					if messageT != nil {
+
+					}
+					if err != nil {
+						log.Printf("Error sending message: %v", err)
 					}
 					break
-				} else {
-					// if last retry send error message
-					if j == 2 {
-						botErrorMessage := fmt.Sprintf("❌ Failed closing trade")
-						botErrorMessage = fmt.Sprintf("%s\n%s", botErrorMessage,
-							fmt.Sprintf("❌ Error: %s", tradeErr.Description))
-						messageT, err := tgBot.sendMessage(botMessage, int(positionMessageId))
-						if messageT != nil {
-
-						}
-						if err != nil {
-							log.Printf("Error sending message: %v", err)
-						}
-						break
-					}
-					time.Sleep(150 * time.Millisecond)
-					continue
 				}
+				time.Sleep(150 * time.Millisecond)
+				continue
 			}
 		}
 	}
