@@ -1402,24 +1402,26 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	// check for tp2 without tp1 and breakeven not setted
 	for _, position := range latestPositions {
 		// is position is winning
-		tpNumber := extractTPFromClientId(position.ClientID)
-		if tpNumber > 2 && isBreakevenSetted(&position) == false {
-			clientId := position.ClientID
-			// check if tp1 is containing
-			messageId := extractMessageIdFromClientId(clientId)
-			tp1Position := getPositionByMessageIdAndTP(latestPositions, messageId, 1)
-			channelID := extractChannelIDFromClientId(clientId)
-			if tp1Position == nil {
-				// trigger tp1_hit and breakeven
-				messagePositions := getPositionsByMessageId(latestPositions, messageId)
-				// trigger breakeven
-				// send message
-				if len(messagePositions) > 0 {
-					positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
-					// check if breakeven is setted for the channel on redis
-					if tgBot.RedisClient.IsBreakevenEnabled(channelID) {
-						tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
-						tgBot.doBreakeven(messagePositions, 1)
+		if position.Profit > 0 {
+			tpNumber := extractTPFromClientId(position.ClientID)
+			if tpNumber > 1 && isBreakevenSetted(&position) == false {
+				clientId := position.ClientID
+				// check if tp1 is containing
+				messageId := extractMessageIdFromClientId(clientId)
+				tp1Position := getPositionByMessageIdAndTP(latestPositions, messageId, 1)
+				channelID := extractChannelIDFromClientId(clientId)
+				if tp1Position == nil {
+					// trigger tp1_hit and breakeven
+					messagePositions := getPositionsByMessageId(latestPositions, messageId)
+					// trigger breakeven
+					// send message
+					if len(messagePositions) > 0 {
+						positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+						// check if breakeven is setted for the channel on redis
+						if tgBot.RedisClient.IsBreakevenEnabled(channelID) {
+							tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
+							tgBot.doBreakeven(messagePositions, 1)
+						}
 					}
 				}
 			}
