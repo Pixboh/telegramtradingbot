@@ -123,18 +123,8 @@ func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64
 	riskPerTradePercentage := tgBot.RedisClient.GetRiskPercentage()
 	entryPrice := price
 	volume := tgBot.RedisClient.GetTradingVolume(channelId)
-	strategy := tgBot.RedisClient.GetStrategy()
-
 	// stopLoss distance in pips
 	pipsToStopLoss := calculatePips(entryPrice, stopLoss, request.Symbol)
-	if strategy == "3TP" || strategy == "TP2" {
-		if request.TakeProfit2 > 0 {
-			pipsToStopLoss = pipsToStopLoss + calculatePips(entryPrice, request.StopLoss, request.Symbol)
-		}
-		if request.TakeProfit3 > 0 && strategy == "3TP" {
-			pipsToStopLoss = pipsToStopLoss + calculatePips(entryPrice, request.StopLoss, request.Symbol)
-		}
-	}
 	// dynamic volume calculation
 	dynamicVolume := tgBot.calculateVolumeSizeForTradeRequest(pipsToStopLoss, riskPerTradePercentage, accountBalance)
 	if dynamicVolume <= volume {
