@@ -19,6 +19,7 @@ import (
 	"tdlib/authmanager"
 	"tdlib/config"
 	"tdlib/redis_client"
+	"time"
 )
 
 type TgBot struct {
@@ -53,7 +54,7 @@ func (tgBot *TgBot) Start() {
 	defer cancel()
 	// run cron
 	c := cron.New()
-	c.AddFunc("@every 20s", tgBot.checkCurrentPositions) // Adapter le délai
+	c.AddFunc("@every 5s", tgBot.checkCurrentPositions) // Adapter le délai
 	// cron to run every day at 00:00
 	c.AddFunc("0 0 * * *", tgBot.updateDailyInfo)
 	// TODO remove line
@@ -134,8 +135,10 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 
 	//clientOpenApi := openai.NewClient(openaiApiKey)
 	// Setup message update handlers.
+	lastMessageTime := time.Now().Unix()
+	lastChannelId := int64(0)
+	firstCall := true
 	d.OnNewChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateNewChannelMessage) error {
-
 		log.Info("Channel message", zap.Any("message", u.Message))
 		m, ok := u.Message.(*tg.Message)
 		if ok && m.Out {
@@ -146,6 +149,7 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 			log.Info("Message is not a trading signal")
 			return nil
 		}
+
 		// get channel by loop e.Channels map[int64]*tg.Channel
 		messageChannel := tg.Channel{}
 		for _, channel := range e.Channels {
@@ -155,6 +159,17 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 				return nil
 			}
 		}
+		// avoid trading signals from the same channel in less than 2 seconds
+		if time.Now().Unix()-lastMessageTime < 3 {
+			if !firstCall && lastChannelId == messageChannel.ID {
+				log.Info("Trading signal from the same channel in less than 2 seconds")
+				// sleep for 2 seconds in to let the first trade request to be handled
+				time.Sleep(5 * time.Second)
+			}
+		}
+		lastMessageTime = time.Now().Unix()
+		lastChannelId = messageChannel.ID
+		firstCall = false
 		// check current symbole price
 		to, isReplyTo := m.GetReplyTo()
 		replyTradeRequest := &TradeRequest{}

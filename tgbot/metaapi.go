@@ -1001,6 +1001,10 @@ func (tgBot *TgBot) validateTradeValue(r *TradeRequest, strategy string) error {
 	if strategy == "TP2" {
 		r.TakeProfit3 = 0
 	}
+	// error if  stop loss. inferior to 0
+	if r.StopLoss <= 0 {
+		return errors.New("stop loss must be superior to 0")
+	}
 
 	return nil
 
@@ -1395,6 +1399,7 @@ func getDefaultStopLoss(actionType string, entryPrice float64) float64 {
 
 func (tgBot *TgBot) checkCurrentPositions() {
 	println("Checking current positions")
+	startTime := time.Now()
 	latestPositions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 	if err != nil {
 		println("Error getting current user positions: ", err)
@@ -1479,27 +1484,33 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		// FATAL MA NDEY FOFOU
 		tpNumber := extractTPFromClientId(clientId)
 		if tpNumber > 1 {
+			positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 			// check if position is making profit
 			if position.Profit > 0 && position.isBreakevenSetted() {
 				// check if position has take profit and we can split the volume
 				if position.TakeProfit > 0 && position.Volume > 0.02 {
 					// ensure that we've not already partially closed the position
-					if position.RealizedProfit == 0 {
-						// distance to take profit
-						distance := position.TakeProfit - position.OpenPrice
-						// check if current price is close to take profit by 60%
-						if position.CurrentPrice >= position.OpenPrice+distance*0.6 {
-							// close half profit
-							err := tgBot.doCloseHalfProfitTrade(position)
-							if err != nil {
-								//log
-								println("Error closing half profit trade: ", err)
-								// send message to user
-								tgBot.sendMessage("[AUTO] Error closing half profit trade : "+err.Error(), 0)
-								break
-							} else {
-								// send message to user
-								tgBot.sendMessage("[AUTO] Half profit trade closed", 0)
+					if position.RealizedProfit <= 0 {
+						// if already partially closed brokerComment with be like "to #positionId"
+						if !strings.Contains(position.BrokerComment, "to") {
+							// distance to take profit
+							distance := position.TakeProfit - position.OpenPrice
+							// check if current price is close to take profit by 60%
+							if position.CurrentPrice >= position.OpenPrice+distance*0.6 {
+								// close half profit
+								err := tgBot.doCloseHalfProfitTrade(position)
+								if err != nil {
+
+									//log
+									println("Error closing half profit trade: ", err)
+									// send message to user
+
+									tgBot.sendMessage("[AUTO] Error closing half profit trade : "+err.Error(), int(positionMessageId))
+									break
+								} else {
+									// send message to user
+									tgBot.sendMessage("[AUTO] Half profit trade closed", int(positionMessageId))
+								}
 							}
 						}
 					}
@@ -1507,9 +1518,36 @@ func (tgBot *TgBot) checkCurrentPositions() {
 			}
 		}
 	}
+	// longer positions that last more than 12 hours should be closed if they are making profit
+	for _, position := range latestPositions {
+		// check if position is older than 12 hours
+		timeString := position.Time
+		timePos, err := time.Parse(time.RFC3339, timeString)
+		if err != nil {
+			println("Error parsing time: ", err)
+		}
+		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+
+		// check if position is older than 12 hours
+		if timePos.Before(time.Now().Add(-12 * time.Hour)) {
+			// check if position is making profit
+			if position.Profit > 0 {
+				// send message
+				tgBot.doSlToEntryPrice([]MetaApiPosition{position})
+				// send message
+				tgBot.sendMessage("Position closed after 12 hours", int(positionMessageId))
+			}
+
+		}
+	}
 
 	tgBot.updateDailyInfo()
-
+	// log end and duration
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+	//duration in seconds line 2s or 0.2 s
+	seconds := duration.Seconds()
+	println("Checking current positions done in ", seconds)
 }
 
 // function to get today profit
@@ -1926,4 +1964,21 @@ func (tgBot *TgBot) getAccount() (MetaApiAccount, error) {
 	}
 
 	return account, nil
+}
+
+// get the total possible loss of the day
+func (tgBot *TgBot) getOngoingLossRiskTotal() float64 {
+	// get today positiions from metaapi
+	todayPositions, errP := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
+	if errP != nil {
+		println("Error getting today positions: ", errP)
+	}
+	totalLoss := 0.0
+	for _, position := range todayPositions {
+		pipsLoss := calculatePips(position.OpenPrice, position.CurrentPrice, position.Symbol)
+		// loss in money
+		totalLoss += pipsLoss * position.Volume
+	}
+
+	return totalLoss
 }

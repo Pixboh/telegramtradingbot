@@ -447,6 +447,12 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 		text = "Status : OFF (❌)"
 	}
 	text = text + "\n-------------------------"
+	// meta apî account info
+	// name
+	information, err := tgBot.getAccountInformation()
+	if err != nil {
+		return err
+	}
 
 	// current trade volume
 	text = text + "\nTrade Volume : 📈" + fmt.Sprintf("%.2f", tgBot.RedisClient.GetDefaultTradingVolume())
@@ -476,12 +482,10 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	text = text + "\nMax Similar Trades 📈: " + fmt.Sprintf("%d", tgBot.RedisClient.GetMaxSimilarTrades())
 	text = text + "\n-------------------------"
 
-	// meta apî account info
-	// name
-	information, err := tgBot.getAccountInformation()
-	if err != nil {
-		return err
-	}
+	// oongoing loss risk total
+	text = text + "\nOngoing Loss Risk Total 💸: " + fmt.Sprintf("-%.2f", tgBot.getOngoingLossRiskTotal()) + " " + information.Currency
+	text = text + "\n-------------------------"
+
 	text = text + "\nAccount Name 🏦: " + information.Name
 	text = text + "\n-------------------------"
 	// current profit reached
