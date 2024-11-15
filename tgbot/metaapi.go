@@ -260,7 +260,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				if i > 1 {
 					break
 				}
-			} else if strategy == "TP3" {
+			} else if strategy == "3TP" {
 				if i > 2 {
 					break
 				}
