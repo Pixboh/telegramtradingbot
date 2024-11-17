@@ -57,6 +57,8 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("set_max_open_trades", tgBot.setMaxOpenTradesCallback))
 	// set max similar trades
 	dispatcher.AddHandler(handlers.NewCommand("set_maximum_similar_trades", tgBot.setMaxSimilarTradesCallback))
+	// set channel auto trade
+	dispatcher.AddHandler(handlers.NewCommand("set_channel_auto_trade", tgBot.setChannelAutoTradeCallback))
 
 	dispatcher.AddHandler(handlers.NewCallback(nil, tgBot.handleCallback))
 
@@ -90,7 +92,7 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 		},
 		{
 			Command:     "set_volume",
-			Description: "Set trading volume",
+			Description: "Set maximum trading volume",
 		},
 		{
 			Command:     "set_daily_profit_goal",
@@ -132,10 +134,107 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 			Command:     "set_maximum_similar_trades",
 			Description: "Set maximum similar trades",
 		},
+		{
+			Command:     "set_channel_auto_trade",
+			Description: "Set channel auto trade",
+		},
 	}, nil)
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
+}
+
+func (tgBot *TgBot) setChannelAutoTradeCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setChannelAutoTrade(b, ctx, false)
+}
+
+// enable automatic trading for a channel or allow for all
+func (tgBot *TgBot) setChannelAutoTrade(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// first show list of channels
+	// get all working channelIds
+	channelIds := tgBot.RedisClient.GetChannels()
+	// load telegram channelIds
+	// list of channels telegram
+	telegramChats := make([]tg.MessagesChats, 0)
+	for _, channelId := range channelIds {
+		inputChannles := make([]tg.InputChannelClass, 0)
+		inputChannles = append(inputChannles, &tg.InputChannel{
+			ChannelID: channelId,
+		})
+		telegramChannelById, errTg := tgBot.tdClient.API().ChannelsGetChannels(context.Background(), inputChannles)
+		if errTg != nil {
+			//		return fmt.Errorf("failed to get channels: %w", errTg)
+		}
+		if telegramChannelById == nil {
+			continue
+		} else {
+			// cast to chats
+			tMessageChat := telegramChannelById.(*tg.MessagesChats)
+			telegramChats = append(telegramChats, *tMessageChat)
+		}
+
+	}
+
+	// create inline keyboard
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	// enable all channels
+	channelAutoTradeAll := tgBot.RedisClient.GetChannelAutoTradeAll()
+	text := "All Channels"
+	if channelAutoTradeAll {
+		text = text + " ✅"
+	}
+	inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+		{
+			Text:         text,
+			CallbackData: fmt.Sprintf("enable_channel_auto_trade_all"),
+		},
+	})
+	{
+		for _, channelItemA := range telegramChats {
+			for _, channelItem := range channelItemA.Chats {
+				channelAutoTrade := tgBot.RedisClient.IsChannelAutoTrade(channelItem.(*tg.Channel).ID)
+				if channel, ok := channelItem.(*tg.Channel); ok {
+					text := channel.Title
+					if channelAutoTrade {
+						text = text + " ✅"
+					}
+					inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+						{
+							Text:         text,
+							CallbackData: fmt.Sprintf("channel_auto_trade_%s", strconv.Itoa(int(channel.ID))),
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the channel to set the auto trade:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the channel to set the auto trade:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
+
 }
 
 func (tgBot *TgBot) setMaxSimilarTradesCallback(b *gotgbot.Bot, ctx *ext.Context) error {
@@ -792,7 +891,7 @@ func (tgBot *TgBot) setTradeVolume(b *gotgbot.Bot, ctx *ext.Context, update bool
 	}
 	// check if reply or edit
 	if !update {
-		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the trade volume:"), &gotgbot.SendMessageOpts{
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the max trade volume:"), &gotgbot.SendMessageOpts{
 			ParseMode:   "HTML",
 			ReplyMarkup: replyMarkup,
 		})
@@ -1235,6 +1334,25 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 		return tgBot.setMaxSimilarTrades(b, ctx, true)
 	}
 
+	// channel auto trade
+	if strings.HasPrefix(data, "channel_auto_trade_") {
+		channelIDStr := strings.TrimPrefix(data, "channel_auto_trade_")
+		channelID, err := strconv.Atoi(channelIDStr)
+		if err != nil {
+			return fmt.Errorf("invalid channel ID")
+		}
+
+		// Ajouter le channel sélectionné à Redis ou autre
+
+		if tgBot.RedisClient.GetChannelAutoTrade(channelID) {
+			tgBot.RedisClient.SetChannelAutoTrade(channelID, false)
+		} else {
+			tgBot.RedisClient.SetChannelAutoTrade(channelID, true)
+		}
+
+		return tgBot.setChannelAutoTrade(b, ctx, true)
+	}
+
 	switch ctx.CallbackQuery.Data {
 	case "start_trading":
 		// Add your logic to start trading
@@ -1264,6 +1382,17 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 			}
 			return tgBot.setSymbols(b, ctx, 0)
 		}
+		//channel auto trade for all
+	case "enable_channel_auto_trade_all":
+		{
+			if tgBot.RedisClient.GetChannelAutoTradeAll() {
+				tgBot.RedisClient.SetChannelAutoTradeAll(false)
+			} else {
+				tgBot.RedisClient.SetChannelAutoTradeAll(true)
+			}
+			return tgBot.setChannelAutoTrade(b, ctx, true)
+		}
+
 	default:
 	}
 	return nil

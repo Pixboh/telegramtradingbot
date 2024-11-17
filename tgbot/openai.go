@@ -273,7 +273,7 @@ func (tgBot *TgBot) GptParseNewMessage(message string, apiKey string, symbols []
 	// if generated symbol is not in list of symbol take the symbole that contain the full symbol name in the list
 	if !StringInSlice(tradeRequest.Symbol, symbols) {
 		for _, symbol := range symbols {
-			// check if generated symbol is contain example "XAUUSD" is in "XAUUSD-STD" do a string search comparaison
+			// check if generated symbol is contain example "XAUUSD" is in "XAUUSDdsfrsdds" do a string search comparaison
 			if strings.Contains(symbol, tradeRequest.Symbol) {
 				tradeRequest.Symbol = symbol
 				break

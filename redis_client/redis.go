@@ -119,6 +119,8 @@ func (rdClient *RedisClient) IsChannelExist(channelId int64) bool {
 // trading default volume
 func (rdClient *RedisClient) SetDefaultTradingVolume(volume float64) {
 	rdClient.Rdb.Set(context.Background(), "trading_volume", volume, 0)
+	// set default volume for all channels
+	rdClient.Rdb.Del(context.Background(), "channel_volume")
 }
 
 func (rdClient *RedisClient) GetDefaultTradingVolume() float64 {
@@ -210,6 +212,9 @@ func (rdClient *RedisClient) IsSymbolExist(symbol string) bool {
 // boolean to authorize all symbols
 func (rdClient *RedisClient) SetAllSymbols(allSymbols bool) {
 	rdClient.Rdb.Set(context.Background(), "all_symbols", allSymbols, 0)
+	if allSymbols {
+		rdClient.Rdb.Del(context.Background(), "symbols")
+	}
 }
 
 // get all symbols
@@ -416,6 +421,8 @@ func (rdClient *RedisClient) GetBotStatus() string {
 // enable breakeven for all
 func (rdClient *RedisClient) EnableBreakeven() {
 	rdClient.Rdb.Set(ctx, "breakeven_enabled_for_all", "true", 0)
+	// enable breakeven for all
+	rdClient.Rdb.Del(ctx, "breakeven_enabled")
 }
 
 // disable breakeven for all
@@ -445,6 +452,10 @@ func (rdClient *RedisClient) IsBreakevenEnabled(id int) bool {
 }
 func (rdClient *RedisClient) SetBreakevenEnabled(id int, enabled bool) {
 	rdClient.Rdb.HSet(ctx, "breakeven_enabled", strconv.Itoa(id), enabled)
+	// if all channels are set to breakeven, remove the key
+	if !enabled && rdClient.IsBreakevenEnabledForAll() {
+		rdClient.SetBreakevenEnabledForAll(false)
+	}
 }
 
 func (rdClient *RedisClient) SetBreakevenEnabledForAll(b bool) {
@@ -538,4 +549,44 @@ func (rdClient *RedisClient) GetMaxSimilarTrades() int {
 
 func (rdClient *RedisClient) SetMaxSimilarTrades(max int) {
 	rdClient.Rdb.Set(ctx, "max_similar_trades", max, 0)
+}
+
+func (rdClient *RedisClient) GetChannelAutoTrade(i int) bool {
+	autoTrade := rdClient.Rdb.HGet(ctx, "channel_auto_trade", strconv.Itoa(i))
+	if autoTrade.Err() != nil {
+		return false
+	}
+	return autoTrade.Val() == "1"
+}
+
+func (rdClient *RedisClient) SetChannelAutoTrade(i int, autoTrade bool) {
+	rdClient.Rdb.HSet(ctx, "channel_auto_trade", strconv.Itoa(i), autoTrade)
+	// if all channels are set to auto trade, remove the key
+	if rdClient.GetChannelAutoTradeAll() {
+		rdClient.SetChannelAutoTradeAll(false)
+	}
+}
+
+func (rdClient *RedisClient) GetChannelAutoTradeAll() bool {
+	autoTrade := rdClient.Rdb.Get(ctx, "channel_auto_trade_all")
+	if autoTrade.Err() != nil {
+		return false
+	}
+	return autoTrade.Val() == "1"
+}
+
+func (rdClient *RedisClient) SetChannelAutoTradeAll(autoTrade bool) {
+	rdClient.Rdb.Set(ctx, "channel_auto_trade_all", autoTrade, 0)
+	// if all channels are set to auto trade, remove the key
+	if autoTrade {
+		rdClient.Rdb.Del(ctx, "channel_auto_trade")
+	}
+}
+
+func (rdClient *RedisClient) IsChannelAutoTrade(i int64) bool {
+	// if all channels are set to auto trade, return true
+	if rdClient.GetChannelAutoTradeAll() {
+		return true
+	}
+	return rdClient.GetChannelAutoTrade(int(i))
 }

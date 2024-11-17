@@ -1472,7 +1472,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 
 	// if tp2 and tp3 position is making profit up to 60% take half profit to secure
 	// get all tp2 tp3 positions
-	for _, position := range latestPositions {
+	/**for _, position := range latestPositions {
 		clientId := position.ClientID
 		if clientId == "" {
 			if position.OriginalComment != "" {
@@ -1518,6 +1518,8 @@ func (tgBot *TgBot) checkCurrentPositions() {
 			}
 		}
 	}
+	**/
+
 	// longer positions that last more than 12 hours should be closed if they are making profit
 	for _, position := range latestPositions {
 		// check if position is older than 12 hours
