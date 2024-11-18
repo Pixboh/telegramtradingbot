@@ -268,14 +268,14 @@ func (tgBot *TgBot) PushHandleRequestInputToRedis(input *HandleRequestInput) err
 }
 
 func (tgBot *TgBot) updateDailyInfo() {
-	// get account balance
-	information, err := tgBot.getAccountInformation()
-	if err != nil {
-		return
-	}
-	balance := information.Equity
-	// save account balance if 0
 	if tgBot.getAccountBalance() == 0 {
+		// get account balance
+		information, err := tgBot.getAccountInformation()
+		if err != nil {
+			return
+		}
+		balance := information.Equity
+		// save account balance if 0
 		tgBot.RedisClient.SetAccountBalance(balance)
 	}
 }
@@ -283,7 +283,7 @@ func (tgBot *TgBot) updateDailyInfo() {
 // get account balance
 func (tgBot *TgBot) getAccountBalance() float64 {
 	balance := tgBot.RedisClient.GetAccountBalance()
-	if balance == 0 {
+	if balance == 0.0 {
 		// get account balance
 		information, err := tgBot.getAccountInformation()
 		if err != nil {

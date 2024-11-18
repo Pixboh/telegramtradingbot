@@ -59,6 +59,8 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("set_maximum_similar_trades", tgBot.setMaxSimilarTradesCallback))
 	// set channel auto trade
 	dispatcher.AddHandler(handlers.NewCommand("set_channel_auto_trade", tgBot.setChannelAutoTradeCallback))
+	// get channels daily stats
+	dispatcher.AddHandler(handlers.NewCommand("get_channels_daily_stats", tgBot.getChannelsDailyStatsCallback))
 
 	dispatcher.AddHandler(handlers.NewCallback(nil, tgBot.handleCallback))
 
@@ -138,10 +140,110 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 			Command:     "set_channel_auto_trade",
 			Description: "Set channel auto trade",
 		},
+		{
+			Command:     "get_channels_daily_stats",
+			Description: "Get channels daily stats",
+		},
 	}, nil)
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
+}
+
+func (tgBot *TgBot) getChannelsDailyStatsCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.getChannelsDailyStats(b, ctx, false)
+}
+
+// get channel history position and determine all tp1 , tp2 , tp3, sl we have hit
+func (tgBot *TgBot) getChannelsDailyStats(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// get today position
+	todayPositionPositions, err := tgBot.getTodayPositions()
+	if err != nil {
+		return err
+	}
+	// active channel
+	activeChannels := tgBot.RedisClient.GetChannels()
+	// maps channel id to positions
+	chanPos := make(map[int][]MetaApiPosition)
+	for _, position := range todayPositionPositions {
+		for _, channelId := range activeChannels {
+			chanId := extractChannelIDFromClientId(position.ClientID)
+			if chanId == int(channelId) {
+				chanPos[chanId] = append(chanPos[chanId], position)
+			}
+		}
+	}
+	// get all channel names
+	// load telegram channelIds
+	// list of channels telegram
+	telegramChats := make([]tg.MessagesChats, 0)
+	for _, channelId := range activeChannels {
+		inputChannles := make([]tg.InputChannelClass, 0)
+		inputChannles = append(inputChannles, &tg.InputChannel{
+			ChannelID: channelId,
+		})
+		telegramChannelById, errTg := tgBot.tdClient.API().ChannelsGetChannels(context.Background(), inputChannles)
+		if errTg != nil {
+			//		return fmt.Errorf("failed to get channels: %w", errTg)
+		}
+		if telegramChannelById == nil {
+			continue
+		} else {
+			// cast to chats
+			tMessageChat := telegramChannelById.(*tg.MessagesChats)
+			telegramChats = append(telegramChats, *tMessageChat)
+		}
+	}
+	// create message of this format ;
+	// channel1 Name
+	// TP1 ✅"
+	// TP2 ✅"
+	// SL ❌"
+	// Channel2 Name ...
+	response := ""
+	for _, channelItemA := range telegramChats {
+		for _, channelItem := range channelItemA.Chats {
+			if channel, ok := channelItem.(*tg.Channel); ok {
+				positions, ok := chanPos[int(channel.ID)]
+				if !ok {
+					continue
+				}
+				response = response + channelItem.(*tg.Channel).Title + "\n"
+				// loop chanPos to get all tp1 , tp2 , tp3, sl we have hit
+				// maps clientId and message
+				clientIdToMessage := make(map[string]string)
+				for _, chanPositionItem := range positions {
+					newClientId := chanPositionItem.ClientID[:len(chanPositionItem.ClientID)-4]
+					m := chanPositionItem.outcomeMessage()
+					if m != "" {
+						clientIdToMessage[newClientId] = m
+					}
+				}
+				for _, message := range clientIdToMessage {
+					response = response + message + "\n"
+				}
+			}
+		}
+	}
+
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, response, &gotgbot.SendMessageOpts{
+			ParseMode: "HTML",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, response, &gotgbot.EditMessageTextOpts{
+			ParseMode: "HTML",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
+
 }
 
 func (tgBot *TgBot) setChannelAutoTradeCallback(b *gotgbot.Bot, ctx *ext.Context) error {

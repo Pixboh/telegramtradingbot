@@ -251,6 +251,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		// trade response list
 		var tradeResponses []TradeResponse
 		tradeSuccess := false
+		remainingVolume := tradeRequest.Volume
 		for i, metaApiRequest := range metaApiRequests {
 			if strategy == "TP1" {
 				if i > 0 {
@@ -266,17 +267,35 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				}
 			}
 			takeProfit := 0.0
+			metaApiTradeVolume := remainingVolume
 			if i == 0 {
 				takeProfit = tradeRequest.TakeProfit1
+				// tp1 should be 60% of the volume
+				if len(metaApiRequests) == 1 {
+					metaApiTradeVolume = tradeRequest.Volume
+				} else {
+					metaApiTradeVolume = tradeRequest.Volume * 0.6
+				}
+				remainingVolume = tradeRequest.Volume - metaApiTradeVolume
+
 			} else if i == 1 {
 				takeProfit = tradeRequest.TakeProfit2
+				// tp2 should be 40% of the volume
+				if len(metaApiRequests) == 2 {
+					metaApiTradeVolume = tradeRequest.Volume * 0.4
+				} else if len(metaApiRequests) == 3 {
+					metaApiTradeVolume = tradeRequest.Volume * 0.3
+				}
+				remainingVolume = remainingVolume - metaApiTradeVolume
 			} else if i == 2 {
 				takeProfit = tradeRequest.TakeProfit3
+				// tp3 should be 10% of the volume
+				metaApiTradeVolume = remainingVolume
+
 			}
 			tpNumber := i + 1
-			metaApiTradeVolume := tradeRequest.Volume
-			metaApiTradeVolume = metaApiTradeVolume / float64(len(metaApiRequests))
-			// minimum volume is 0.01
+			// 2 digits
+			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
 			if metaApiTradeVolume < 0.01 {
 				metaApiTradeVolume = 0.01
 			}
@@ -546,7 +565,17 @@ func (tgBot *TgBot) CheckIfTradeCanFit(positions []MetaApiPosition, request Trad
 // trade are similar if they have the same symbol and the same direction and trade time is less than 1 hour
 func (tgBot *TgBot) CountSimilarTrades(positions []MetaApiPosition, request TradeRequest) int {
 	count := 0
+	similarPositions := []MetaApiPosition{}
 	for _, position := range positions {
+		// count only tp1 positions
+		if position.isBreakevenSetted() {
+			// do not count breakeven positions
+			continue
+		}
+		tpNumber := extractTPFromClientId(position.ClientID)
+		if tpNumber != 1 {
+			continue
+		}
 		// check if the trade is less than 1 hour
 		tradeTimeString := position.Time
 		tradeTimeTime, err := time.Parse(time.RFC3339, tradeTimeString)
@@ -559,11 +588,14 @@ func (tgBot *TgBot) CountSimilarTrades(positions []MetaApiPosition, request Trad
 			positionType = "POSITION_TYPE_SELL"
 		}
 		if position.Symbol == request.Symbol && position.Type == positionType {
-			if time.Since(tradeTimeTime).Hours() < 2 {
+			similarTradeMaxHour := tgBot.RedisClient.GetSimilarTradeMaxHour()
+			if time.Since(tradeTimeTime).Hours() < similarTradeMaxHour {
 				count++
+				similarPositions = append(similarPositions, position)
 			}
 		}
 	}
+
 	return count
 }
 
@@ -1180,6 +1212,29 @@ func (p *MetaApiPosition) isBreakevenSetted() bool {
 		return p.StopLoss <= p.OpenPrice
 	}
 	return false
+}
+
+func (p *MetaApiPosition) isWin() bool {
+	if !p.isBreakevenSetted() {
+		return p.Profit > 0
+	}
+	return false
+}
+
+func (p *MetaApiPosition) outcomeMessage() string {
+	// if dont time is set
+	// if broker comment contains [tp]=
+	if strings.Contains(p.BrokerComment, "[tp]") {
+		// message format: TP1 hit (1.12 eur)
+		tp := extractTPFromClientId(p.ClientID)
+		return fmt.Sprintf("TP%d ✅ (%.2f %s)", tp, p.TakeProfit, "EUR")
+	}
+	// if broker comment contains [sl]
+	if strings.Contains(p.BrokerComment, "[sl]") {
+		// message format: SL hit (1.1234 eur)
+		return fmt.Sprintf("SL ❌ (%.2f %s)", p.StopLoss, "EUR")
+	}
+	return ""
 }
 
 // convert list of MetaApiPosition to MetaApiPositionLite
@@ -1826,11 +1881,32 @@ func isBreakevenSetted(position *MetaApiPosition) bool {
 		if position.StopLoss >= position.OpenPrice {
 			return true
 		}
+		//
+		distance := position.OpenPrice - position.StopLoss
+		distance = math.Abs(distance)
+		symbole := position.Symbol
+		pointSize := getCurrencyPointSize(symbole)
+		margin := pointSize * 2
+		distancePoint := distance / pointSize
+		if distancePoint <= margin {
+			return true
+		}
 	} else if position.Type == "POSITION_TYPE_SELL" {
 		// stop loss inferior to entry price
 		if position.StopLoss <= position.OpenPrice {
 			return true
 		}
+		//
+		distance := position.StopLoss - position.OpenPrice
+		distance = math.Abs(distance)
+		symbole := position.Symbol
+		pointSize := getCurrencyPointSize(symbole)
+		margin := pointSize * 2
+		distancePoint := distance / pointSize
+		if distancePoint <= margin {
+			return true
+		}
+
 	}
 	return false
 }
@@ -1977,7 +2053,7 @@ func (tgBot *TgBot) getOngoingLossRiskTotal() float64 {
 	}
 	totalLoss := 0.0
 	for _, position := range todayPositions {
-		pipsLoss := calculatePips(position.OpenPrice, position.CurrentPrice, position.Symbol)
+		pipsLoss := calculatePips(position.OpenPrice, position.StopLoss, position.Symbol)
 		// loss in money
 		totalLoss += pipsLoss * position.Volume
 	}

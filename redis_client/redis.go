@@ -514,7 +514,7 @@ func (rdClient *RedisClient) GetAccountBalance() float64 {
 	today := time.Now().Format("2006-01-02")
 	balance := rdClient.Rdb.HGet(ctx, "account_balance", today)
 	if balance.Err() != nil {
-		return 0
+		return 0.0
 	}
 	balanceFloat, _ := strconv.ParseFloat(balance.Val(), 64)
 	return balanceFloat
@@ -589,4 +589,22 @@ func (rdClient *RedisClient) IsChannelAutoTrade(i int64) bool {
 		return true
 	}
 	return rdClient.GetChannelAutoTrade(int(i))
+}
+
+func (rdClient *RedisClient) GetSimilarTradeMaxHour() float64 {
+	defaultMaxHour := 2.0
+	max := rdClient.Rdb.Get(ctx, "similar_trade_max_hour")
+	if max.Err() != nil {
+		return defaultMaxHour
+	}
+	maxInt, _ := strconv.ParseFloat(max.Val(), 64)
+	// default to 24
+	if maxInt == 0 {
+		return defaultMaxHour
+	}
+	return maxInt
+}
+
+func (rdClient *RedisClient) SetSimilarTradeMaxHour(max int) {
+	rdClient.Rdb.Set(ctx, "similar_trade_max_hour", max, 0)
 }
