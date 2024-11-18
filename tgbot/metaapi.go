@@ -1227,12 +1227,12 @@ func (p *MetaApiPosition) outcomeMessage() string {
 	if strings.Contains(p.BrokerComment, "[tp]") {
 		// message format: TP1 hit (1.12 eur)
 		tp := extractTPFromClientId(p.ClientID)
-		return fmt.Sprintf("TP%d ✅ (%.2f %s)", tp, p.TakeProfit, "EUR")
+		return fmt.Sprintf("TP%d ✅ (%.2f %s)", tp, p.Profit, "EUR")
 	}
 	// if broker comment contains [sl]
 	if strings.Contains(p.BrokerComment, "[sl]") {
 		// message format: SL hit (1.1234 eur)
-		return fmt.Sprintf("SL ❌ (%.2f %s)", p.StopLoss, "EUR")
+		return fmt.Sprintf("SL ❌ (%.2f %s)", p.Profit, "EUR")
 	}
 	return ""
 }

@@ -222,6 +222,10 @@ func (tgBot *TgBot) getChannelsDailyStats(b *gotgbot.Bot, ctx *ext.Context, upda
 				for _, message := range clientIdToMessage {
 					response = response + message + "\n"
 				}
+				// if empty
+				if len(clientIdToMessage) == 0 {
+					response = response + "--No trades today--\n"
+				}
 			}
 		}
 	}
