@@ -1149,6 +1149,7 @@ type MetaApiPosition struct {
 	DoneBrokerTime              *string `json:"doneBrokerTime,omitempty"`
 	UpdateTime                  string  `json:"updateTime,omitempty"`
 	OpenPrice                   float64 `json:"openPrice,omitempty"`
+	EntryType                   string  `json:"entryType,omitempty"`
 	Volume                      float64 `json:"volume,omitempty"`
 	Swap                        float64 `json:"swap,omitempty"`
 	RealizedSwap                float64 `json:"realizedSwap,omitempty"`
@@ -1170,12 +1171,14 @@ type MetaApiPosition struct {
 	UpdateSequenceNumber        float64 `json:"updateSequenceNumber,omitempty"`
 	State                       string  `json:"state,omitempty"`
 	OriginalComment             string  `json:"originalComment,omitempty"`
+	Price                       float64 `json:"price,omitempty"`
 }
 
 // lite position version for IA
 type MetaApiPositionLite struct {
 	ID         string  `json:"id"`
 	OpenPrice  float64 `json:"openPrice,omitempty"`
+	Price      float64 `json:"price,omitempty"`
 	StopLoss   float64 `json:"stopLoss,omitempty"`
 	TakeProfit float64 `json:"takeProfit,omitempty"`
 	Profit     float64 `json:"profit,omitempty"`
@@ -1221,24 +1224,27 @@ func (p *MetaApiPosition) isWin() bool {
 	return false
 }
 
-func (p *MetaApiPosition) outcomeMessage() string {
+func (p *MetaApiPosition) outcomeMessage(profit float64) string {
 	// if dont time is set
 	// if broker comment contains [tp]=
 	if p.isBreakeven() {
 		return ""
 	}
+	if p.Profit == 0 {
+		return ""
+	}
 	// parse time to format 2006-01-02 15:04:05
-	if strings.Contains(p.BrokerComment, "[tp]") {
+	if p.Profit > 0 {
 		// message format: TP1 hit (1.12 eur)
 		tp := extractTPFromClientId(p.ClientID)
-		return fmt.Sprintf("TP%d ✅ (%.2f %s %s)", tp, p.Profit, "EUR", p.Time)
+		return fmt.Sprintf("TP%d ✅ (%.2f %s)", tp, profit, "EUR")
 	}
 	// if broker comment contains [sl]
-	if strings.Contains(p.BrokerComment, "[sl]") {
+	if p.Profit < 0 {
 		// message format: SL hit (1.1234 eur)
-		return fmt.Sprintf("SL ❌ (%.2f %s)", p.Profit, "EUR")
+		return fmt.Sprintf("SL ❌ (%.2f %s)", profit, "EUR")
 	}
-	return fmt.Sprintf("CLOSED (%.2f %s)", p.Profit, "EUR")
+	return fmt.Sprintf("CLOSED (%.2f %s)", profit, "EUR")
 }
 
 // convert list of MetaApiPosition to MetaApiPositionLite
@@ -1434,9 +1440,10 @@ func calculateNewStopLossPriceForBreakeven(entryPrice float64, actionType string
 	pips := 0.0
 	// calculate new stop loss
 	newStopLoss := 0.0
-	if actionType == "POSITION_TYPE_BUY" {
+
+	if actionType == "POSITION_TYPE_BUY" || actionType == "DEAL_TYPE_BUY" {
 		newStopLoss = entryPrice + (pips + margin)
-	} else if actionType == "POSITION_TYPE_SELL" {
+	} else if actionType == "POSITION_TYPE_SELL" || actionType == "DEAL_TYPE_SELL" {
 		newStopLoss = entryPrice - (pips + margin)
 	}
 	return newStopLoss
@@ -1862,6 +1869,61 @@ func (tgBot *TgBot) getTodayPositions() ([]MetaApiPosition, error) {
 			filteredPositions = append(filteredPositions, position)
 		}
 	}
+	// enchace value with order
+	positionOrders, errO := tgBot.getTodayOrders()
+	if errO != nil {
+
+	}
+	// merge positions and orders
+	for _, order := range positionOrders {
+		for i, position := range filteredPositions {
+			if position.ID == order.ID {
+				filteredPositions[i].OpenPrice = order.OpenPrice
+				filteredPositions[i].CurrentPrice = order.CurrentPrice
+			}
+		}
+	}
+	return filteredPositions, nil
+}
+
+// todays position orders ! {{baseUrl}}/users/current/accounts/:accountId/history-orders/time/:startTime/:endTime
+func (tgBot *TgBot) getTodayOrders() ([]MetaApiPosition, error) {
+	startDay := time.Now().Format("2006-01-02T00:00:00Z")
+	// yesteray
+	// TODO remove this
+	startDay = time.Now().Add(-24 * time.Hour).Format("2006-01-02T00:00:00Z")
+	//
+	endDay := time.Now().Add(24 * time.Hour).Format("2006-01-02T00:00:00Z")
+	url := fmt.Sprintf("%s/users/current/accounts/%s/history-orders/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
+		tgBot.AppConfig.MetaApiAccountID, startDay, endDay)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("failed to fetch today positions")
+	}
+
+	var positions []MetaApiPosition
+	err = json.NewDecoder(resp.Body).Decode(&positions)
+	if err != nil {
+		return nil, err
+	}
+	// exclud positions of type DEAL_TYPE_BALANCE
+	var filteredPositions []MetaApiPosition
+	for _, position := range positions {
+		if position.Type != "DEAL_TYPE_BALANCE" {
+			filteredPositions = append(filteredPositions, position)
+		}
+	}
 	return filteredPositions, nil
 }
 
@@ -1921,17 +1983,26 @@ func isBreakevenSetted(position *MetaApiPosition) bool {
 
 // is position breakeven
 func (position *MetaApiPosition) isBreakeven() bool {
+	if position.Profit == 0 {
+		return true
+	}
 	if position.StopLoss == 0 {
 		return false
 	}
-	//
-	distance := position.OpenPrice - position.StopLoss
+	actionType := "POSITION_TYPE_BUY"
+	if position.EntryType == "DEAL_ENTRY_OUT" {
+		if position.Type == "DEAL_TYPE_BUY" {
+			actionType = "POSITION_TYPE_SELL"
+		}
+	}
+	breakevenPrice := calculateNewStopLossPriceForBreakeven(position.OpenPrice, actionType, position.Symbol)
+	distance := breakevenPrice - position.StopLoss
+	//round
+	distance = math.Round(distance*100) / 100
 	distance = math.Abs(distance)
-	symbole := position.Symbol
-	pointSize := getCurrencyPointSize(symbole)
+	pointSize := getCurrencyPointSize(position.Symbol)
 	margin := pointSize * 2
-	distancePoint := distance / pointSize
-	if distancePoint <= margin {
+	if distance <= margin {
 		return true
 	}
 	return false

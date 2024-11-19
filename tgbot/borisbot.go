@@ -209,16 +209,28 @@ func (tgBot *TgBot) getChannelsDailyStats(b *gotgbot.Bot, ctx *ext.Context, upda
 				if !ok {
 					continue
 				}
-				response = response + channelItem.(*tg.Channel).Title + "\n"
+				response = response + "\n " + "👉  " + channelItem.(*tg.Channel).Title + "\n "
+
 				// loop chanPos to get all tp1 , tp2 , tp3, sl we have hit
 				// maps clientId and message
 				clientIdToMessage := make(map[string]string)
+				lastPositionNewCL := ""
+				positionNewClTotalProfit := 0.0
 				for _, chanPositionItem := range positions {
+					if chanPositionItem.Price == 0 {
+						continue
+					}
 					newClientId := chanPositionItem.ClientID[:len(chanPositionItem.ClientID)-4]
-					m := chanPositionItem.outcomeMessage()
+					if lastPositionNewCL != newClientId {
+						positionNewClTotalProfit = 0.0
+					}
+					positionNewClTotalProfit = positionNewClTotalProfit + chanPositionItem.Profit
+					m := chanPositionItem.outcomeMessage(positionNewClTotalProfit)
 					if m != "" {
 						clientIdToMessage[newClientId] = m
+
 					}
+					lastPositionNewCL = newClientId
 				}
 				for _, message := range clientIdToMessage {
 					response = response + message + "\n"
