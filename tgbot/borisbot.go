@@ -148,6 +148,7 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
+	tgBot.sendMessage("Bot launched successfully", 0)
 }
 
 func (tgBot *TgBot) getChannelsDailyStatsCallback(b *gotgbot.Bot, ctx *ext.Context) error {
