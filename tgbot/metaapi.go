@@ -1224,17 +1224,21 @@ func (p *MetaApiPosition) isWin() bool {
 func (p *MetaApiPosition) outcomeMessage() string {
 	// if dont time is set
 	// if broker comment contains [tp]=
+	if p.isBreakeven() {
+		return ""
+	}
+	// parse time to format 2006-01-02 15:04:05
 	if strings.Contains(p.BrokerComment, "[tp]") {
 		// message format: TP1 hit (1.12 eur)
 		tp := extractTPFromClientId(p.ClientID)
-		return fmt.Sprintf("TP%d ✅ (%.2f %s)", tp, p.Profit, "EUR")
+		return fmt.Sprintf("TP%d ✅ (%.2f %s %s)", tp, p.Profit, "EUR", p.Time)
 	}
 	// if broker comment contains [sl]
 	if strings.Contains(p.BrokerComment, "[sl]") {
 		// message format: SL hit (1.1234 eur)
 		return fmt.Sprintf("SL ❌ (%.2f %s)", p.Profit, "EUR")
 	}
-	return ""
+	return fmt.Sprintf("CLOSED (%.2f %s)", p.Profit, "EUR")
 }
 
 // convert list of MetaApiPosition to MetaApiPositionLite
@@ -1823,6 +1827,10 @@ func calculateProfit(positions []MetaApiPosition, filledOnly bool) float64 {
 // day from midnight to midnight
 func (tgBot *TgBot) getTodayPositions() ([]MetaApiPosition, error) {
 	startDay := time.Now().Format("2006-01-02T00:00:00Z")
+	// yesteray
+	// TODO remove this
+	startDay = time.Now().Add(-24 * time.Hour).Format("2006-01-02T00:00:00Z")
+	//
 	endDay := time.Now().Add(24 * time.Hour).Format("2006-01-02T00:00:00Z")
 	url := fmt.Sprintf("%s/users/current/accounts/%s/history-deals/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
 		tgBot.AppConfig.MetaApiAccountID, startDay, endDay)
@@ -1907,6 +1915,24 @@ func isBreakevenSetted(position *MetaApiPosition) bool {
 			return true
 		}
 
+	}
+	return false
+}
+
+// is position breakeven
+func (position *MetaApiPosition) isBreakeven() bool {
+	if position.StopLoss == 0 {
+		return false
+	}
+	//
+	distance := position.OpenPrice - position.StopLoss
+	distance = math.Abs(distance)
+	symbole := position.Symbol
+	pointSize := getCurrencyPointSize(symbole)
+	margin := pointSize * 2
+	distancePoint := distance / pointSize
+	if distancePoint <= margin {
+		return true
 	}
 	return false
 }
