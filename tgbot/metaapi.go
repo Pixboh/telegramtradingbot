@@ -1835,8 +1835,6 @@ func calculateProfit(positions []MetaApiPosition, filledOnly bool) float64 {
 func (tgBot *TgBot) getTodayPositions() ([]MetaApiPosition, error) {
 	startDay := time.Now().Format("2006-01-02T00:00:00Z")
 	// yesteray
-	// TODO remove this
-	startDay = time.Now().Add(-24 * time.Hour).Format("2006-01-02T00:00:00Z")
 	//
 	endDay := time.Now().Add(24 * time.Hour).Format("2006-01-02T00:00:00Z")
 	url := fmt.Sprintf("%s/users/current/accounts/%s/history-deals/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
@@ -1889,9 +1887,6 @@ func (tgBot *TgBot) getTodayPositions() ([]MetaApiPosition, error) {
 // todays position orders ! {{baseUrl}}/users/current/accounts/:accountId/history-orders/time/:startTime/:endTime
 func (tgBot *TgBot) getTodayOrders() ([]MetaApiPosition, error) {
 	startDay := time.Now().Format("2006-01-02T00:00:00Z")
-	// yesteray
-	// TODO remove this
-	startDay = time.Now().Add(-24 * time.Hour).Format("2006-01-02T00:00:00Z")
 	//
 	endDay := time.Now().Add(24 * time.Hour).Format("2006-01-02T00:00:00Z")
 	url := fmt.Sprintf("%s/users/current/accounts/%s/history-orders/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
