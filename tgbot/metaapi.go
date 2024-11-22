@@ -1549,7 +1549,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 				closeAllPositions := true
 				// on going loss
 				totalLossOngoing := tgBot.getOngoingLossRiskTotal(latestPositions)
-				if totalLossOngoing > 0 {
+				if totalLossOngoing >= 0 {
 					// if loss can be covered wont hurt daily profit goal
 					if currentDayProfit-totalLossOngoing >= defaultProfitGoal {
 						closeAllPositions = false
