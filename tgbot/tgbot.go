@@ -182,20 +182,19 @@ func (tgBot *TgBot) run(ctx context.Context) error {
 					replyToMsgId, errS := ExtractReplyToMessageId(s)
 					if errS != nil {
 						log.Error("Error extracting reply to message id", zap.Error(errS))
-						return errS
 					}
 					replyTradeBytes := tgBot.RedisClient.GetTradeRequest(int64(replyToMsgId))
-					var replyTrade TradeRequest
-					errUnmarshal := json.Unmarshal(replyTradeBytes, &replyTrade)
-					if errUnmarshal != nil {
-						log.Info("Error unmarshalling trade request", zap.Error(errUnmarshal))
-						return errUnmarshal
+					if replyTradeBytes != nil {
+						var replyTrade TradeRequest
+						errUnmarshal := json.Unmarshal(replyTradeBytes, &replyTrade)
+						if errUnmarshal != nil {
+							log.Info("Error unmarshalling trade request", zap.Error(errUnmarshal))
+						}
+						if replyTrade.Symbol == "" {
+							log.Info("No trade request found for this message")
+						}
+						replyTradeRequest = &replyTrade
 					}
-					if replyTrade.Symbol == "" {
-						log.Info("No trade request found for this message")
-						return nil
-					}
-					replyTradeRequest = &replyTrade
 				}
 			}
 		}

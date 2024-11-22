@@ -319,9 +319,6 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			tpNumber := i + 1
 			// 2 digits
 			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
-			if metaApiTradeVolume < 0.01 {
-				metaApiTradeVolume = 0.01
-			}
 			metaApiRequest.Volume = &metaApiTradeVolume
 			// concat channel id and channel initial
 			chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
@@ -1529,7 +1526,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	profitGoal := tgBot.RedisClient.GetDailyProfitGoal()
 	if profitGoal > 0 {
 		// add margin of 10% to the profit goal
-		profitGoal = profitGoal * 1.17
+		profitGoal = profitGoal * 1.11
 		latestPositions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 		if err != nil {
 			println("Error getting current user positions: ", err)
