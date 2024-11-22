@@ -319,6 +319,12 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			tpNumber := i + 1
 			// 2 digits
 			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
+			// if volume is less than 0.01 skip trade²
+			if metaApiTradeVolume < 0.01 {
+				log.Printf("Volume less than 0.01")
+				tgBot.sendMessage("❌ Volume less than 0.01", 0)
+				return nil, nil, errors.New("volume less than 0.01")
+			}
 			metaApiRequest.Volume = &metaApiTradeVolume
 			// concat channel id and channel initial
 			chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
@@ -1523,7 +1529,9 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	// if profit goal is not reached
 	// check if the bot reached the objective amount profit
 	// get amount from redis
-	profitGoal := tgBot.RedisClient.GetDailyProfitGoal()
+
+	defaultProfitGoal := tgBot.RedisClient.GetDailyProfitGoal()
+	profitGoal := defaultProfitGoal
 	if profitGoal > 0 {
 		// add margin of 10% to the profit goal
 		profitGoal = profitGoal * 1.11
@@ -1543,7 +1551,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 				totalLossOngoing := tgBot.getOngoingLossRiskTotal(latestPositions)
 				if totalLossOngoing > 0 {
 					// if loss can be covered wont hurt daily profit goal
-					if currentDayProfit-totalLossOngoing >= profitGoal {
+					if currentDayProfit-totalLossOngoing >= defaultProfitGoal {
 						closeAllPositions = false
 					}
 				}
