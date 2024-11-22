@@ -1527,10 +1527,6 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	if profitGoal > 0 {
 		// add margin of 10% to the profit goal
 		profitGoal = profitGoal * 1.11
-		latestPositions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
-		if err != nil {
-			println("Error getting current user positions: ", err)
-		}
 		onGoingProfit := calculateProfit(latestPositions, false)
 		// get today positiions from metaapi
 		todayPositions, errP := tgBot.getTodayPositions()
@@ -1542,15 +1538,26 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		if currentDayProfit >= profitGoal || currentDayProfit+onGoingProfit >= profitGoal {
 			// if current positions are making currentDayProfit or close to the currentDayProfit goal close all positions
 			if onGoingProfit > 0 {
-				tgBot.doCloseTrade(latestPositions)
-				// confirm by get current positions
-				latestPositions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
-				if err != nil {
-					println("Error getting current user positions: ", err)
+				closeAllPositions := true
+				// on going loss
+				totalLossOngoing := tgBot.getOngoingLossRiskTotal(latestPositions)
+				if totalLossOngoing > 0 {
+					// if loss can be covered wont hurt daily profit goal
+					if currentDayProfit-totalLossOngoing >= profitGoal {
+						closeAllPositions = false
+					}
 				}
-				if len(latestPositions) == 0 {
-					// send message to user
-					tgBot.sendMessage("Profit goal of "+strconv.FormatFloat(profitGoal, 'f', 2, 64)+" reached. Bot is now sleepig until tomorrow", 0)
+				if closeAllPositions {
+					tgBot.doCloseTrade(latestPositions)
+					// confirm by get current positions
+					latestPositions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
+					if err != nil {
+						println("Error getting current user positions: ", err)
+					}
+					if len(latestPositions) == 0 {
+						// send message to user
+						tgBot.sendMessage("Profit goal of "+strconv.FormatFloat(profitGoal, 'f', 2, 64)+" reached. Bot is now sleepig until tomorrow", 0)
+					}
 				}
 
 			}
@@ -2156,12 +2163,18 @@ func (tgBot *TgBot) getAccount() (MetaApiAccount, error) {
 }
 
 // get the total possible loss of the day
-func (tgBot *TgBot) getOngoingLossRiskTotal() float64 {
+func (tgBot *TgBot) getOngoingLossRiskTotal(todayPositions []MetaApiPosition) float64 {
 	// get today positiions from metaapi
-	todayPositions, errP := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
-	if errP != nil {
-		println("Error getting today positions: ", errP)
+	if todayPositions != nil && len(todayPositions) == 0 {
+		pos, errP := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
+		if errP != nil {
+			println("Error getting today positions: ", errP)
+		}
+		if pos != nil {
+			todayPositions = pos
+		}
 	}
+
 	totalLoss := 0.0
 	for _, position := range todayPositions {
 		pipsLoss := calculatePips(position.OpenPrice, position.StopLoss, position.Symbol)

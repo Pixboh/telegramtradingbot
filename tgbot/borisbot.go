@@ -701,7 +701,7 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 	text = text + "\n-------------------------"
 
 	// oongoing loss risk total
-	text = text + "\nOngoing Loss Risk Total 💸: " + fmt.Sprintf("-%.2f", tgBot.getOngoingLossRiskTotal()) + " " + information.Currency
+	text = text + "\nOngoing Loss Risk Total 💸: " + fmt.Sprintf("-%.2f", tgBot.getOngoingLossRiskTotal(nil)) + " " + information.Currency
 	text = text + "\n-------------------------"
 
 	text = text + "\nAccount Name 🏦: " + information.Name
