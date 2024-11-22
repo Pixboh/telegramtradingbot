@@ -608,3 +608,15 @@ func (rdClient *RedisClient) GetSimilarTradeMaxHour() float64 {
 func (rdClient *RedisClient) SetSimilarTradeMaxHour(max int) {
 	rdClient.Rdb.Set(ctx, "similar_trade_max_hour", max, 0)
 }
+
+func (rdClient *RedisClient) SaveSecuredPosition(id string) {
+	rdClient.Rdb.HSet(ctx, "secured_positions", id, "1")
+}
+
+func (rdClient *RedisClient) IsSecuredPosition(id string) bool {
+	secured := rdClient.Rdb.HGet(ctx, "secured_positions", id)
+	if secured.Err() != nil {
+		return false
+	}
+	return secured.Val() == "1"
+}

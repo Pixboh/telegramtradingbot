@@ -30,10 +30,11 @@ func (tgBot *TgBot) calculateVolumeSizeForTradeRequest(stopLossDistancePips floa
 	riskInDollar := accountBalance * (riskPercentage / 100)
 	// Calcul du volume en fonction du risque en dollar
 	volume := riskInDollar / stopLossDistancePips
-	// Volume minimum = 0.01
-	if volume < 0.01 {
-		volume = 0.01
-	}
+	return math.Round(volume*100) / 100
+}
+func (tgBot *TgBot) calculateVolumeSizeForTradeRequestByProfit(stopLossDistancePips float64, accountBalance float64, riskInDollar float64) float64 {
+	// Calcul du volume en fonction du risque en dollar
+	volume := riskInDollar / stopLossDistancePips
 	return math.Round(volume*100) / 100
 }
 
@@ -117,22 +118,31 @@ func isTradeValidWith3TP(entryPrice, stopLoss, tp1, tp2, tp3, minRiskRewardRatio
 }
 
 // get trading dynamic volume
-func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64, accountBalance float64, channelId int) float64 {
-	// here we will evaluate the risk management of the trade request
+func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64, accountBalance float64, channelId int, maxRiskableProfit float64) float64 {
 	stopLoss := request.StopLoss
 	riskPerTradePercentage := tgBot.RedisClient.GetRiskPercentage()
 	entryPrice := price
-	volume := tgBot.RedisClient.GetTradingVolume(channelId)
-	// stopLoss distance in pips
 	pipsToStopLoss := calculatePips(entryPrice, stopLoss, request.Symbol)
-	// dynamic volume calculation
-	dynamicVolume := tgBot.calculateVolumeSizeForTradeRequest(pipsToStopLoss, riskPerTradePercentage, accountBalance)
-	if dynamicVolume <= volume {
-		// recorrection of volume
-		volume = dynamicVolume
+	// here we will evaluate the risk management of the trade request
+	maxVolume := tgBot.RedisClient.GetTradingVolume(channelId)
+	if maxRiskableProfit < 5 {
+		// stopLoss distance in pips
+		// dynamic maxVolume calculation
+		dynamicVolume := tgBot.calculateVolumeSizeForTradeRequest(pipsToStopLoss, riskPerTradePercentage, accountBalance)
+		if dynamicVolume <= maxVolume {
+			// recorrection of maxVolume
+			maxVolume = dynamicVolume
+		}
+		return maxVolume
+	} else {
+		// calculate volume based on maxRiskableProfit
+		dynammcVolume := tgBot.calculateVolumeSizeForTradeRequestByProfit(pipsToStopLoss, accountBalance, maxRiskableProfit)
+		if dynammcVolume <= maxVolume {
+			// recorrection of maxVolume
+			maxVolume = dynammcVolume
+		}
 	}
-
-	return volume
+	return maxVolume
 }
 
 // get traderequest possible loss in usd

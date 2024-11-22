@@ -142,11 +142,21 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		}
 
 		// check if reached daily profit
-		if tgBot.reachedProfitGoal() {
-			log.Printf("Reached daily profit goal")
-			tgBot.sendMessage("❌ Daily profit goal reached", 0)
-			return nil, nil, errors.New("daily profit goal reached")
+		todayProfit := tgBot.getTodayProfit()
+		dailyProfitGoal := tgBot.RedisClient.GetDailyProfitGoal()
+		riskableProfit := -1.0
+		if todayProfit >= dailyProfitGoal {
+			riskableProfit = todayProfit - dailyProfitGoal
+			if riskableProfit > 4 {
+				log.Printf("Reached daily profit goal but still have riskable profit")
+			} else {
+				log.Printf("Reached daily profit goal")
+				tgBot.sendMessage("❌ Daily profit goal reached", 0)
+				return nil, nil, errors.New("daily profit goal reached")
+			}
+
 		}
+
 		// check if reach loss limit
 		if tgBot.reachedDailyLossLimit() {
 			log.Printf("Reached daily loss limit")
@@ -160,6 +170,13 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		if err != nil {
 			return nil, nil, err
 		}
+		if len(positions) > 0 && riskableProfit > 0 {
+			// reach daily profit goal
+			log.Printf("Reached daily profit goal")
+			tgBot.sendMessage("❌ Daily profit goal reached", 0)
+			return nil, nil, errors.New("daily profit goal reached")
+		}
+
 		// check for similar trades ongoing
 		maxSimilarTrades := tgBot.RedisClient.GetMaxSimilarTrades()
 		if tgBot.CountSimilarTrades(positions, *tradeRequest) >= maxSimilarTrades {
@@ -208,7 +225,13 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 
 		// pass trade request to risk management to validate or reject the trade
 		balance := tgBot.getAccountBalance()
-		volume := tgBot.GetTradingDynamicVolume(tradeRequest, currentPrice, balance, int(input.ChannelID))
+		volume := tgBot.GetTradingDynamicVolume(tradeRequest, currentPrice, balance, int(input.ChannelID), riskableProfit)
+		// do not trade if volume inferior to 0.01
+		if volume < 0.01 {
+			log.Printf("Volume less than 0.01")
+			tgBot.sendMessage("❌ Volume less than 0.01", 0)
+			return nil, nil, errors.New("volume less than 0.01")
+		}
 		tradeRequest.Volume = volume
 
 		// avoid dboule trade
@@ -274,7 +297,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				if len(metaApiRequests) == 1 {
 					metaApiTradeVolume = tradeRequest.Volume
 				} else {
-					metaApiTradeVolume = tradeRequest.Volume * 0.6
+					metaApiTradeVolume = tradeRequest.Volume * 0.7
 				}
 				remainingVolume = tradeRequest.Volume - metaApiTradeVolume
 
@@ -282,9 +305,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 				takeProfit = tradeRequest.TakeProfit2
 				// tp2 should be 40% of the volume
 				if len(metaApiRequests) == 2 {
-					metaApiTradeVolume = tradeRequest.Volume * 0.4
-				} else if len(metaApiRequests) == 3 {
 					metaApiTradeVolume = tradeRequest.Volume * 0.3
+				} else if len(metaApiRequests) == 3 {
+					metaApiTradeVolume = tradeRequest.Volume * 0.2
 				}
 				remainingVolume = remainingVolume - metaApiTradeVolume
 			} else if i == 2 {
@@ -1505,6 +1528,8 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	// get amount from redis
 	profitGoal := tgBot.RedisClient.GetDailyProfitGoal()
 	if profitGoal > 0 {
+		// add margin of 10% to the profit goal
+		profitGoal = profitGoal * 1.17
 		latestPositions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 		if err != nil {
 			println("Error getting current user positions: ", err)
@@ -1538,53 +1563,52 @@ func (tgBot *TgBot) checkCurrentPositions() {
 
 	// if tp2 and tp3 position is making profit up to 60% take half profit to secure
 	// get all tp2 tp3 positions
-	/**for _, position := range latestPositions {
-		clientId := position.ClientID
-		if clientId == "" {
-			if position.OriginalComment != "" {
-				clientId = position.OriginalComment
-			} else {
-				continue
-			}
-		}
+	for _, position := range latestPositions {
 		// FATAL MA NDEY FOFOU
-		tpNumber := extractTPFromClientId(clientId)
+		tpNumber := extractTPFromClientId(position.ClientID)
+		// check if position is not already secured
+		if tgBot.RedisClient.IsSecuredPosition(position.ID) {
+			continue
+		}
 		if tpNumber > 1 {
 			positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 			// check if position is making profit
 			if position.Profit > 0 && position.isBreakevenSetted() {
 				// check if position has take profit and we can split the volume
-				if position.TakeProfit > 0 && position.Volume > 0.02 {
+				if position.Volume > 0.02 {
+					// if case no take profit setted use a max take profit
+					if position.TakeProfit == 0 {
+						// add 500 pips to the current price
+						pointSize := getCurrencyPointSize(position.Symbol)
+						position.TakeProfit = position.CurrentPrice + (500 * pointSize)
+					}
 					// ensure that we've not already partially closed the position
-					if position.RealizedProfit <= 0 {
-						// if already partially closed brokerComment with be like "to #positionId"
-						if !strings.Contains(position.BrokerComment, "to") {
-							// distance to take profit
-							distance := position.TakeProfit - position.OpenPrice
-							// check if current price is close to take profit by 60%
-							if position.CurrentPrice >= position.OpenPrice+distance*0.6 {
-								// close half profit
-								err := tgBot.doCloseHalfProfitTrade(position)
-								if err != nil {
+					// if already partially closed brokerComment with be like "to #positionId"
+					// distance to take profit
+					distance := position.TakeProfit - position.OpenPrice
+					// check if current price is close to take profit by 60%
+					if position.CurrentPrice >= position.OpenPrice+distance*0.55 {
+						// close half profit
+						err := tgBot.doCloseHalfProfitTrade(position)
+						if err != nil {
 
-									//log
-									println("Error closing half profit trade: ", err)
-									// send message to user
+							//log
+							println("Error closing half profit trade: ", err)
+							// send message to user
 
-									tgBot.sendMessage("[AUTO] Error closing half profit trade : "+err.Error(), int(positionMessageId))
-									break
-								} else {
-									// send message to user
-									tgBot.sendMessage("[AUTO] Half profit trade closed", int(positionMessageId))
-								}
-							}
+							tgBot.sendMessage("[AUTO] Error closing half profit trade : "+err.Error(), int(positionMessageId))
+							break
+						} else {
+							// send message to user
+							tgBot.sendMessage("[AUTO] Half profit trade closed", int(positionMessageId))
+							// save to secured position
+							tgBot.RedisClient.SaveSecuredPosition(position.ID)
 						}
 					}
 				}
 			}
 		}
 	}
-	**/
 
 	// longer positions that last more than 12 hours should be closed if they are making profit
 	for _, position := range latestPositions {
