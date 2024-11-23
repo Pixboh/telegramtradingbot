@@ -85,6 +85,8 @@ func (rdClient *RedisClient) AddChannel(channelId int64) {
 // remove channels from list channels
 func (rdClient *RedisClient) RemoveChannel(channelId int64) {
 	rdClient.Rdb.SRem(context.Background(), "channels", channelId)
+	chanIdString := strconv.FormatInt(channelId, 10)
+	rdClient.Rdb.HDel(context.Background(), "channel_scores", chanIdString)
 }
 
 // get all channels
@@ -592,6 +594,7 @@ func (rdClient *RedisClient) IsChannelAutoTrade(i int64) bool {
 }
 
 func (rdClient *RedisClient) GetSimilarTradeMaxHour() float64 {
+
 	defaultMaxHour := 2.0
 	max := rdClient.Rdb.Get(ctx, "similar_trade_max_hour")
 	if max.Err() != nil {
@@ -619,4 +622,44 @@ func (rdClient *RedisClient) IsSecuredPosition(id string) bool {
 		return false
 	}
 	return secured.Val() == "1"
+}
+
+func (rdClient *RedisClient) SaveChannelScore(scores map[string]float64) {
+	rdClient.Rdb.HDel(ctx, "channel_scores")
+	for id, score := range scores {
+		rdClient.Rdb.HSet(ctx, "channel_scores", id, score)
+	}
+}
+
+func (rdClient *RedisClient) GetChannelScore(id string) float64 {
+	secured := rdClient.Rdb.HGet(ctx, "channel_scores", id)
+	if secured.Err() != nil {
+		return 0
+	}
+	f, err := secured.Float64()
+	if err != nil {
+		return 0
+	}
+	return f
+}
+
+func (rdClient *RedisClient) GetAllChannelScores() (map[string]float64, error) {
+	// Récupérer toutes les paires clé-valeur du hash "channel_scores"
+	result, err := rdClient.Rdb.HGetAll(ctx, "channel_scores").Result()
+	if err != nil {
+		return nil, err // Retourner une erreur si la commande échoue
+	}
+
+	// Convertir les valeurs en float64
+	scores := make(map[string]float64)
+	for id, value := range result {
+		score, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			scores[id] = 0 // Si la conversion échoue, assigner 0 comme valeur par défaut
+		} else {
+			scores[id] = score
+		}
+	}
+
+	return scores, nil
 }

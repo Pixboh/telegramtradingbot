@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"tdlib/authmanager"
@@ -61,6 +62,8 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("set_channel_auto_trade", tgBot.setChannelAutoTradeCallback))
 	// get channels daily stats
 	dispatcher.AddHandler(handlers.NewCommand("get_channels_daily_stats", tgBot.getChannelsDailyStatsCallback))
+	// get channels score and max volume
+	dispatcher.AddHandler(handlers.NewCommand("get_channels_score", tgBot.getChannelsScoresCallback))
 
 	dispatcher.AddHandler(handlers.NewCallback(nil, tgBot.handleCallback))
 
@@ -144,11 +147,95 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 			Command:     "get_channels_daily_stats",
 			Description: "Get channels daily stats",
 		},
+
+		{
+			Command:     "get_channels_score",
+			Description: "Get channels Score",
+		},
 	}, nil)
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
 	tgBot.sendMessage("Bot launched successfully", 0)
+}
+
+func (tgBot *TgBot) getChannelsScoresCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.getChannelsScores(b, ctx, false)
+
+}
+
+func (tgBot *TgBot) getChannelsScores(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// active channel
+	activeChannels, _ := tgBot.RedisClient.GetAllChannelScores()
+	if activeChannels == nil || len(activeChannels) == 0 {
+		positions, err := tgBot.getMonthPositions()
+		if err != nil {
+			return err
+		}
+		tgBot.updateScores(positions)
+		activeChannels, _ = tgBot.RedisClient.GetAllChannelScores()
+
+	}
+	// maps channel id to positions
+	// get all channel names
+	// load telegram channelIds
+	// list of channels telegram
+	response := ""
+
+	for channelId, chanScore := range activeChannels {
+		inputChannles := make([]tg.InputChannelClass, 0)
+		chanIdint, _ := strconv.Atoi(channelId)
+		inputChannles = append(inputChannles, &tg.InputChannel{
+			ChannelID: int64(chanIdint),
+		})
+		telegramChannelById, errTg := tgBot.tdClient.API().ChannelsGetChannels(context.Background(), inputChannles)
+		if errTg != nil {
+			//		return fmt.Errorf("failed to get channels: %w", errTg)
+		}
+		if telegramChannelById == nil {
+			continue
+		} else {
+			// cast to chats
+			tMessageChat := telegramChannelById.(*tg.MessagesChats)
+			for _, channelItemA := range tMessageChat.Chats {
+				if channel, ok := channelItemA.(*tg.Channel); ok {
+					chanScore = math.Floor(chanScore) * 100 / 100
+					if chanScore < 0 {
+						response = response + "❌" + channel.Title
+						scoreS := strconv.FormatFloat(chanScore, 'f', -1, 64)
+						response = response + " ( " + scoreS + " ) \n "
+					} else if chanScore > 0 {
+						response = response + "✅" + channel.Title
+						scoreS := strconv.FormatFloat(chanScore, 'f', -1, 64)
+						response = response + " ( " + scoreS + " ) \n "
+					} else {
+						response = response + "👀" + channel.Title
+						scoreS := strconv.FormatFloat(chanScore, 'f', -1, 64)
+						response = response + " ( " + scoreS + " ) \n "
+					}
+
+				}
+			}
+
+		}
+	}
+
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, response, &gotgbot.SendMessageOpts{
+			ParseMode: "HTML",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, response, &gotgbot.EditMessageTextOpts{
+			ParseMode: "HTML",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+	return nil
 }
 
 func (tgBot *TgBot) getChannelsDailyStatsCallback(b *gotgbot.Bot, ctx *ext.Context) error {

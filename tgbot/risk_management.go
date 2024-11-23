@@ -3,6 +3,7 @@ package tgbot
 import (
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // calculate profit real price in dollar price or loss price on tradeRequest
@@ -142,7 +143,26 @@ func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64
 			maxVolume = dynammcVolume
 		}
 	}
+	allocVolume := tgBot.calculateAllocatedVolume(channelId)
+	if allocVolume <= maxVolume {
+		maxVolume = allocVolume
+	}
 	return maxVolume
+}
+func (tgBot *TgBot) calculateAllocatedVolume(channelID int) float64 {
+	channelScores, _ := tgBot.RedisClient.GetAllChannelScores()
+	maxVolume := tgBot.RedisClient.GetDefaultTradingVolume()
+
+	// Trouver le score maximum parmi tous les canaux
+	var maxScore float64
+	for _, score := range channelScores {
+		if score > maxScore {
+			maxScore = score
+		}
+	}
+	// Calculer la proportion du volume alloué
+	allocatedVolume := (channelScores[strconv.Itoa(channelID)] / maxScore) * maxVolume
+	return allocatedVolume
 }
 
 // get traderequest possible loss in usd

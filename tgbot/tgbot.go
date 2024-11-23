@@ -55,10 +55,12 @@ func (tgBot *TgBot) Start() {
 	// run cron
 	c := cron.New()
 	c.AddFunc("@every 5s", tgBot.checkCurrentPositions) // Adapter le délai
+	c.AddFunc("@every 24h", tgBot.updateTraderScores)   // Adapter le délai
 	// cron to run every day at 00:00
 	c.AddFunc("0 0 * * *", tgBot.updateDailyInfo)
 	// TODO remove line
 	tgBot.checkCurrentPositions()
+	tgBot.updateTraderScores()
 	c.Start()
 	if err := tgBot.run(ctx); err != nil {
 		panic(err)

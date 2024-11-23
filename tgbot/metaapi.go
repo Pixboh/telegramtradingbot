@@ -1244,7 +1244,7 @@ func (p *MetaApiPosition) isBreakevenSetted() bool {
 }
 
 func (p *MetaApiPosition) isWin() bool {
-	if !p.isBreakevenSetted() {
+	if !p.isBreakeven() {
 		return p.Profit > 0
 	}
 	return false
@@ -1919,10 +1919,105 @@ func (tgBot *TgBot) getTodayPositions() ([]MetaApiPosition, error) {
 	return filteredPositions, nil
 }
 
+func (tgBot *TgBot) getMonthPositions() ([]MetaApiPosition, error) {
+	now := time.Now()
+	// Set startDay to the first day of the current month at midnight
+	startDay := now.AddDate(0, 0, -16).Format("2006-01-02T00:00:00Z")
+
+	// Set endDay to tomorrow at midnight
+	endDay := now.Add(24 * time.Hour).Truncate(24 * time.Hour).Format("2006-01-02T00:00:00Z")
+
+	url := fmt.Sprintf("%s/users/current/accounts/%s/history-deals/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
+		tgBot.AppConfig.MetaApiAccountID, startDay, endDay)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("failed to fetch today positions")
+	}
+
+	var positions []MetaApiPosition
+	err = json.NewDecoder(resp.Body).Decode(&positions)
+	if err != nil {
+		return nil, err
+	}
+	// exclud positions of type DEAL_TYPE_BALANCE
+	var filteredPositions []MetaApiPosition
+	for _, position := range positions {
+		if position.Type != "DEAL_TYPE_BALANCE" {
+			filteredPositions = append(filteredPositions, position)
+		}
+	}
+	// enchace value with order
+	positionOrders, errO := tgBot.getMonthOrders()
+	if errO != nil {
+
+	}
+	// merge positions and orders
+	for _, order := range positionOrders {
+		for i, position := range filteredPositions {
+			if position.ID == order.ID {
+				filteredPositions[i].OpenPrice = order.OpenPrice
+				filteredPositions[i].CurrentPrice = order.CurrentPrice
+			}
+		}
+	}
+	return filteredPositions, nil
+}
+
 // todays position orders ! {{baseUrl}}/users/current/accounts/:accountId/history-orders/time/:startTime/:endTime
 func (tgBot *TgBot) getTodayOrders() ([]MetaApiPosition, error) {
 	startDay := time.Now().Format("2006-01-02T00:00:00Z")
 	endDay := time.Now().Add(24 * time.Hour).Format("2006-01-02T00:00:00Z")
+	url := fmt.Sprintf("%s/users/current/accounts/%s/history-orders/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
+		tgBot.AppConfig.MetaApiAccountID, startDay, endDay)
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Add("auth-token", tgBot.AppConfig.MetaApiToken)
+	req.Header.Add("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("failed to fetch today positions")
+	}
+
+	var positions []MetaApiPosition
+	err = json.NewDecoder(resp.Body).Decode(&positions)
+	if err != nil {
+		return nil, err
+	}
+	// exclud positions of type DEAL_TYPE_BALANCE
+	var filteredPositions []MetaApiPosition
+	for _, position := range positions {
+		if position.Type != "DEAL_TYPE_BALANCE" {
+			filteredPositions = append(filteredPositions, position)
+		}
+	}
+	return filteredPositions, nil
+}
+
+func (tgBot *TgBot) getMonthOrders() ([]MetaApiPosition, error) {
+	now := time.Now()
+	// Set startDay to the first day of the current month at midnight
+	startDay := now.AddDate(0, 0, -16).Format("2006-01-02T00:00:00Z")
+
+	// Set endDay to tomorrow at midnight
+	endDay := now.Add(24 * time.Hour).Truncate(24 * time.Hour).Format("2006-01-02T00:00:00Z")
 	url := fmt.Sprintf("%s/users/current/accounts/%s/history-orders/time/%s/%s", tgBot.AppConfig.MetaApiEndpoint,
 		tgBot.AppConfig.MetaApiAccountID, startDay, endDay)
 

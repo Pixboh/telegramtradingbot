@@ -1,7 +1,6 @@
 package tgbot
 
 import (
-	"fmt"
 	"strconv"
 	"time"
 )
@@ -12,13 +11,32 @@ type TraderScore struct {
 }
 
 // calculate profit rate and update trader scores based on a list of positions
-func (tgBot *TgBot) updateTraderScores(positions []MetaApiPosition, traderScores map[string]*TraderScore) {
-	updateScores(positions, traderScores)
+func (tgBot *TgBot) updateTraderScores() {
+	positions, err := tgBot.getMonthPositions()
+	if err != nil {
+		return
+	}
+	scores := tgBot.updateScores(positions)
+	tgBot.RedisClient.SaveChannelScore(scores)
 }
 
 // updateScores met à jour les scores des traders en fonction de leurs positions et du temps.
-func updateScores(positions []MetaApiPosition, traderScores map[string]*TraderScore) {
+func (tgBot *TgBot) updateScores(positions []MetaApiPosition) map[string]float64 {
+	traderScores := make(map[string]float64)
 	now := time.Now()
+	traderLastTradeTime := make(map[string]string)
+	for _, pos := range positions {
+		traderIDint := extractChannelIDFromClientId(pos.ClientID)
+		if traderIDint == 0 {
+			continue
+		}
+		if !tgBot.RedisClient.IsChannelExist(int64(traderIDint)) {
+			continue
+		}
+		traderID := strconv.Itoa(traderIDint)
+		traderScores[traderID] = 12
+
+	}
 
 	for _, pos := range positions {
 		// Récupérer l'ID du trader
@@ -27,47 +45,45 @@ func updateScores(positions []MetaApiPosition, traderScores map[string]*TraderSc
 			continue
 		}
 		traderID := strconv.Itoa(traderIDint)
-
-		// Initialiser le score si nécessaire
-		if _, exists := traderScores[traderID]; !exists {
-			traderScores[traderID] = &TraderScore{Score: 0, LastUpdate: now}
+		if !tgBot.RedisClient.IsChannelExist(int64(traderIDint)) {
+			continue
 		}
-
-		trader := traderScores[traderID]
 
 		// Appliquer les règles de scoring
-		if pos.Profit > 0 {
-			trader.Score += pos.Profit * 0.5 // Récompense pour les gains
-		} else if pos.Profit < 0 {
-			trader.Score += pos.Profit * 1.5 // Pénalité pour les pertes
+		if pos.isBreakeven() {
+			continue
 		}
-
-		// Mettre à jour la date du dernier trade
-		trader.LastUpdate = now
+		tpNumber := extractTPFromClientId(pos.ClientID)
+		if pos.Profit > 0 {
+			if tpNumber == 1 {
+				traderScores[traderID] += 1
+			} else if tpNumber == 2 {
+				traderScores[traderID] += 2
+			} else if tpNumber == 3 {
+				traderScores[traderID] += 3
+			}
+		} else if pos.Profit < -1 {
+			traderScores[traderID] += -2
+		}
+		// minimum score is 18
+		traderLastTradeTime[traderID] = pos.Time
 	}
 
 	// Appliquer une récompense progressive ou une réduction temporelle
-	for id, score := range traderScores {
-		elapsed := now.Sub(score.LastUpdate).Hours() / 24 // Nombre de jours depuis la dernière mise à jour
+	for id, lastPosTime := range traderLastTradeTime {
 
-		// Augmenter légèrement le score chaque jour (progression lente)
-		if elapsed > 0 {
-			score.Score += elapsed * 0.1
+		if traderScores[id] < 0 {
+			tradeTimeTime, err := time.Parse(time.RFC3339, lastPosTime)
+			if err != nil {
+
+			}
+			elapsed := now.Sub(tradeTimeTime).Hours() / 24 // Nombre de jours depuis la dernière mise à jour
+
+			// Augmenter légèrement le lastPosTime chaque jour (progression lente)
+			if elapsed > 0 {
+				traderScores[id] = traderScores[id] + elapsed*3
+			}
 		}
-
-		// Réduire le score des traders avec de mauvaises performances
-		if score.Score < 0 {
-			score.Score += elapsed * 0.05 // Pénalité négative diminue avec le temps
-		}
-
-		// Empêcher les scores excessivement bas ou hauts
-		if score.Score < -100 {
-			score.Score = -100
-		} else if score.Score > 1000 {
-			score.Score = 1000
-		}
-
-		// Afficher les résultats intermédiaires
-		fmt.Printf("Trader %s: Score=%.2f\n", id, score.Score)
 	}
+	return traderScores
 }
