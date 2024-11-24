@@ -30,9 +30,6 @@ func (tgBot *TgBot) updateScores(positions []MetaApiPosition) map[string]float64
 		if traderIDint == 0 {
 			continue
 		}
-		if !tgBot.RedisClient.IsChannelExist(int64(traderIDint)) {
-			continue
-		}
 		traderID := strconv.Itoa(traderIDint)
 		traderScores[traderID] = 12
 
@@ -45,9 +42,6 @@ func (tgBot *TgBot) updateScores(positions []MetaApiPosition) map[string]float64
 			continue
 		}
 		traderID := strconv.Itoa(traderIDint)
-		if !tgBot.RedisClient.IsChannelExist(int64(traderIDint)) {
-			continue
-		}
 
 		// Appliquer les règles de scoring
 		if pos.isBreakeven() {
@@ -85,5 +79,6 @@ func (tgBot *TgBot) updateScores(positions []MetaApiPosition) map[string]float64
 			}
 		}
 	}
+
 	return traderScores
 }
