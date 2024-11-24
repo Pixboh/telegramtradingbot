@@ -166,16 +166,12 @@ func (tgBot *TgBot) getChannelsScoresCallback(b *gotgbot.Bot, ctx *ext.Context) 
 
 func (tgBot *TgBot) getChannelsScores(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
 	// active channel
-	activeChannels, _ := tgBot.RedisClient.GetAllChannelScores()
-	if activeChannels == nil || len(activeChannels) == 0 {
-		positions, err := tgBot.getMonthPositions()
-		if err != nil {
-			return err
-		}
-		tgBot.updateScores(positions)
-		activeChannels, _ = tgBot.RedisClient.GetAllChannelScores()
-
+	positions, err := tgBot.getMonthPositions()
+	if err != nil {
+		return err
 	}
+	tgBot.updateScores(positions)
+	activeChannels, _ := tgBot.RedisClient.GetAllChannelScores()
 	// maps channel id to positions
 	// get all channel names
 	// load telegram channelIds
