@@ -23,21 +23,12 @@ func (tgBot *TgBot) updateTraderScores() {
 // updateScores met à jour les scores des traders en fonction de leurs positions et du temps.
 func (tgBot *TgBot) updateScores(positions []MetaApiPosition) map[string]float64 {
 	traderScores := make(map[string]float64)
+	channels := tgBot.RedisClient.GetChannels()
+	for _, chanId := range channels {
+		traderScores[strconv.FormatInt(chanId, 10)] = 12
+	}
 	now := time.Now()
 	traderLastTradeTime := make(map[string]string)
-	for _, pos := range positions {
-		traderIDint := extractChannelIDFromClientId(pos.ClientID)
-		if traderIDint == 0 {
-			continue
-		}
-		if !tgBot.RedisClient.IsChannelExist(int64(traderIDint)) {
-			continue
-		}
-		traderID := strconv.Itoa(traderIDint)
-		traderScores[traderID] = 12
-
-	}
-
 	for _, pos := range positions {
 		// Récupérer l'ID du trader
 		traderIDint := extractChannelIDFromClientId(pos.ClientID)
