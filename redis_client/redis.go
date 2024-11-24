@@ -625,7 +625,7 @@ func (rdClient *RedisClient) IsSecuredPosition(id string) bool {
 }
 
 func (rdClient *RedisClient) SaveChannelScore(scores map[string]float64) {
-	rdClient.Rdb.HDel(ctx, "channel_scores")
+	rdClient.Rdb.Del(ctx, "channel_scores")
 	for id, score := range scores {
 		rdClient.Rdb.HSet(ctx, "channel_scores", id, score)
 	}
