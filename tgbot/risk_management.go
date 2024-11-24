@@ -134,7 +134,6 @@ func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64
 			// recorrection of maxVolume
 			maxVolume = dynamicVolume
 		}
-		return maxVolume
 	} else {
 		// calculate volume based on maxRiskableProfit
 		dynammcVolume := tgBot.calculateVolumeSizeForTradeRequestByProfit(pipsToStopLoss, accountBalance, maxRiskableProfit)

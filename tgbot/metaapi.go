@@ -275,6 +275,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		var tradeResponses []TradeResponse
 		tradeSuccess := false
 		remainingVolume := tradeRequest.Volume
+		v1 := 0.0
+		v2 := 0.0
+		v3 := 0.0
 		for i, metaApiRequest := range metaApiRequests {
 			if strategy == "TP1" {
 				if i > 0 {
@@ -300,7 +303,7 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 					metaApiTradeVolume = tradeRequest.Volume * 0.7
 				}
 				remainingVolume = tradeRequest.Volume - metaApiTradeVolume
-
+				v1 = metaApiTradeVolume
 			} else if i == 1 {
 				takeProfit = tradeRequest.TakeProfit2
 				// tp2 should be 40% of the volume
@@ -310,11 +313,12 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 					metaApiTradeVolume = tradeRequest.Volume * 0.2
 				}
 				remainingVolume = remainingVolume - metaApiTradeVolume
+				v2 = metaApiTradeVolume
 			} else if i == 2 {
 				takeProfit = tradeRequest.TakeProfit3
 				// tp3 should be 10% of the volume
 				metaApiTradeVolume = remainingVolume
-
+				v3 = metaApiTradeVolume
 			}
 			tpNumber := i + 1
 			// 2 digits
@@ -331,6 +335,13 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			clientId := fmt.Sprintf("%s_%s_%s", chanelInitials, strconv.Itoa(int(messageId)), "TP"+strconv.Itoa(i+1))
 			// channelID_messageId_TP1
 			metaApiRequest.ClientID = &clientId
+			if tpNumber == 0 {
+
+			}
+			if takeProfit == 0 {
+			}
+			if v1 == v2 && v2 == v3 {
+			}
 
 			// try at least three time
 			for j := 0; j < 3; j++ {
@@ -2268,7 +2279,7 @@ func (tgBot *TgBot) getAccount() (MetaApiAccount, error) {
 // get the total possible loss of the day
 func (tgBot *TgBot) getOngoingLossRiskTotal(todayPositions []MetaApiPosition) float64 {
 	// get today positiions from metaapi
-	if todayPositions != nil && len(todayPositions) == 0 {
+	if todayPositions == nil {
 		pos, errP := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 		if errP != nil {
 			println("Error getting today positions: ", errP)
