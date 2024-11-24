@@ -325,9 +325,8 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
 			// if volume is less than 0.01 skip trade²
 			if metaApiTradeVolume < 0.01 {
-				log.Printf("Volume less than 0.01")
-				tgBot.sendMessage("❌ Volume less than 0.01", 0)
-				return nil, nil, errors.New("volume less than 0.01")
+				// set minimum volule to take non risky trade
+				metaApiTradeVolume = 0.01
 			}
 			metaApiRequest.Volume = &metaApiTradeVolume
 			// concat channel id and channel initial
