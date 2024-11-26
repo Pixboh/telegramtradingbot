@@ -325,8 +325,15 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
 			// if volume is less than 0.01 skip trade²
 			if metaApiTradeVolume < 0.01 {
-				// set minimum volule to take non risky trade
-				metaApiTradeVolume = 0.01
+				// set minimum volume to take non risky trade
+				if i == 1 && tradeRequest.Volume >= 0.01 {
+					// at least take the tp1 fisahbilah
+					metaApiTradeVolume = 0.01
+				} else {
+					log.Printf("Volume less than 0.01")
+					tgBot.sendMessage("❌ Volume less than 0.01", 0)
+					return nil, nil, errors.New("volume less than 0.01")
+				}
 			}
 			metaApiRequest.Volume = &metaApiTradeVolume
 			// concat channel id and channel initial
@@ -624,8 +631,7 @@ func (tgBot *TgBot) CountSimilarTrades(positions []MetaApiPosition, request Trad
 			positionType = "POSITION_TYPE_SELL"
 		}
 		if position.Symbol == request.Symbol && position.Type == positionType {
-			similarTradeMaxHour := tgBot.RedisClient.GetSimilarTradeMaxHour()
-			if time.Since(tradeTimeTime).Hours() < similarTradeMaxHour {
+			if time.Since(tradeTimeTime).Minutes() < 20 {
 				count++
 				similarPositions = append(similarPositions, position)
 			}
@@ -1632,6 +1638,48 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		}
 	}
 
+	// loosing position
+	for _, position := range latestPositions {
+		isLoosing := tgBot.RedisClient.IsLosingPosition(position.ID)
+		if isLoosing && position.Profit > 0 && !position.isBreakeven() {
+			clientId := position.ClientID
+			// check if tp1 is containing
+			messageId := extractMessageIdFromClientId(clientId)
+			messagePositions := getPositionsByMessageId(latestPositions, messageId)
+			// trigger breakeven
+			// send message
+			if len(messagePositions) > 0 {
+				positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+				// check if breakeven is setted for the channel on redis
+				tgBot.sendMessage("Auto breakeven triggered for deadly position", int(positionMessageId))
+				tgBot.doBreakeven(messagePositions, 1)
+			}
+			continue
+
+		}
+		// Check if position has a valid stop loss set
+		if !isLoosing && position.StopLoss > 0 && !position.isBreakeven() {
+			// Calculate the distance to the stop loss
+			totalDistance := math.Abs(position.OpenPrice - position.StopLoss)
+			currentDistance := math.Abs(position.CurrentPrice - position.OpenPrice)
+
+			// Check if the position is nearing 90% of the stop loss distance
+			if currentDistance >= totalDistance*0.80 {
+				// Tag the position as deadly in Redis
+				tgBot.RedisClient.AddLoosingPosition(position.ID)
+
+				// Send notification to the user
+				positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+				tgBot.sendMessage(
+					fmt.Sprintf("[WARNING] Position %s is nearing stop loss (90%% distance reached)", position.ID),
+					int(positionMessageId),
+				)
+
+				println("Position tagged as deadly: ", position.ID)
+			}
+		}
+	}
+
 	// longer positions that last more than 12 hours should be closed if they are making profit
 	for _, position := range latestPositions {
 		// check if position is older than 12 hours
@@ -1645,7 +1693,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		// check if position is older than 12 hours
 		if timePos.Before(time.Now().Add(-12 * time.Hour)) {
 			// check if position is making profit
-			if position.Profit > 0 {
+			if position.Profit > 0 && !position.isBreakeven() {
 				// send message
 				tgBot.doSlToEntryPrice([]MetaApiPosition{position})
 				// send message

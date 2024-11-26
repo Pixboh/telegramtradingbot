@@ -171,14 +171,16 @@ func (tgBot *TgBot) getChannelsScores(b *gotgbot.Bot, ctx *ext.Context, update b
 		return err
 	}
 	tgBot.updateScores(positions)
-	activeChannels, _ := tgBot.RedisClient.GetAllChannelScores()
+	activeChannels, _ := tgBot.RedisClient.GetAllChannelScoresKV()
 	// maps channel id to positions
 	// get all channel names
 	// load telegram channelIds
 	// list of channels telegram
 	response := ""
 
-	for channelId, chanScore := range activeChannels {
+	for _, kv := range activeChannels {
+		channelId := kv.Key
+		chanScore := kv.Value
 		inputChannles := make([]tg.InputChannelClass, 0)
 		chanIdint, _ := strconv.Atoi(channelId)
 		inputChannles = append(inputChannles, &tg.InputChannel{
@@ -196,18 +198,18 @@ func (tgBot *TgBot) getChannelsScores(b *gotgbot.Bot, ctx *ext.Context, update b
 			for _, channelItemA := range tMessageChat.Chats {
 				if channel, ok := channelItemA.(*tg.Channel); ok {
 					chanScore = math.Floor(chanScore) * 100 / 100
-					if chanScore < 0 {
-						response = response + "❌" + channel.Title
+					if chanScore < 12 {
+						response = response + "❌ " + channel.Title
 						scoreS := strconv.FormatFloat(chanScore, 'f', -1, 64)
-						response = response + " ( " + scoreS + " ) \n "
-					} else if chanScore > 0 {
-						response = response + "✅" + channel.Title
+						response = response + " ( <b>" + scoreS + "</b> ) \n "
+					} else if chanScore > 12 {
+						response = response + "✅ " + channel.Title
 						scoreS := strconv.FormatFloat(chanScore, 'f', -1, 64)
-						response = response + " ( " + scoreS + " ) \n "
+						response = response + " ( <b>" + scoreS + "</b> ) \n "
 					} else {
-						response = response + "👀" + channel.Title
+						response = response + "👀 " + channel.Title
 						scoreS := strconv.FormatFloat(chanScore, 'f', -1, 64)
-						response = response + " ( " + scoreS + " ) \n "
+						response = response + " ( <b>" + scoreS + "</b> ) \n "
 					}
 
 				}

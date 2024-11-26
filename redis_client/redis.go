@@ -3,7 +3,9 @@ package redis_client
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/redis/go-redis/v9"
+	"sort"
 	"strconv"
 	"tdlib/custom_request"
 	"time"
@@ -651,15 +653,91 @@ func (rdClient *RedisClient) GetAllChannelScores() (map[string]float64, error) {
 	}
 
 	// Convertir les valeurs en float64
-	scores := make(map[string]float64)
+	_ = make(map[string]float64)
+	type kv struct {
+		Key   string
+		Value float64
+	}
+
+	var kvList []kv
 	for id, value := range result {
 		score, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			scores[id] = 0 // Si la conversion échoue, assigner 0 comme valeur par défaut
-		} else {
-			scores[id] = score
+			score = 0 // Si la conversion échoue, assigner 0 comme valeur par défaut
 		}
+		kvList = append(kvList, kv{id, score})
 	}
 
-	return scores, nil
+	// Trier par score décroissant
+	sort.Slice(kvList, func(i, j int) bool {
+		return kvList[i].Value > kvList[j].Value
+	})
+
+	// Reconstruire le map dans l'ordre trié
+	sortedScores := make(map[string]float64, len(kvList))
+	for _, kv := range kvList {
+		sortedScores[kv.Key] = kv.Value
+	}
+
+	return sortedScores, nil
+}
+
+type KV struct {
+	Key   string
+	Value float64
+}
+
+func (rdClient *RedisClient) GetAllChannelScoresKV() ([]KV, error) {
+	// Récupérer toutes les paires clé-valeur du hash "channel_scores"
+	result, err := rdClient.Rdb.HGetAll(ctx, "channel_scores").Result()
+	if err != nil {
+		return nil, err // Retourner une erreur si la commande échoue
+	}
+
+	// Convertir les valeurs en float64
+	_ = make(map[string]float64)
+
+	var kvList []KV
+	for id, value := range result {
+		score, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			score = 0 // Si la conversion échoue, assigner 0 comme valeur par défaut
+		}
+		kvList = append(kvList, KV{id, score})
+	}
+
+	// Trier par score décroissant
+	sort.Slice(kvList, func(i, j int) bool {
+		return kvList[i].Value > kvList[j].Value
+	})
+
+	return kvList, nil
+}
+
+func (rdClient *RedisClient) AddLoosingPosition(id string) error {
+	// Define the Redis key for storing losing positions
+	losingPositionsKey := "losing_positions"
+
+	// Add the position ID to a Redis list or set
+	err := rdClient.Rdb.SAdd(ctx, losingPositionsKey, id).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add losing position %s: %w", id, err)
+	}
+
+	// Optionally, log the addition
+	println("Losing position added:", id)
+	return nil
+}
+
+func (rdClient *RedisClient) IsLosingPosition(id string) bool {
+	// Define the Redis key for storing losing positions
+	losingPositionsKey := "losing_positions"
+
+	// Check if the position ID is a member of the losing positions set
+	isMember, err := rdClient.Rdb.SIsMember(ctx, losingPositionsKey, id).Result()
+	if err != nil {
+		return false
+	}
+
+	return isMember
 }
