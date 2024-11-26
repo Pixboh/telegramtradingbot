@@ -1644,8 +1644,10 @@ func (tgBot *TgBot) checkCurrentPositions() {
 
 	// loosing position
 	for _, position := range latestPositions {
+		isLoosing := tgBot.RedisClient.IsLosingPosition(position.ID)
+
 		// Check if position has a valid stop loss set
-		if position.StopLoss > 0 && !position.isBreakeven() {
+		if !isLoosing && position.StopLoss > 0 && !position.isBreakeven() {
 			// Calculate the distance to the stop loss
 			totalDistance := math.Abs(position.OpenPrice - position.StopLoss)
 			currentDistance := math.Abs(position.CurrentPrice - position.OpenPrice)
