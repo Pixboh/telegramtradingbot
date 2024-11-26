@@ -2,6 +2,7 @@ package tgbot
 
 import (
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -54,7 +55,10 @@ func (tgBot *TgBot) updateScores(positions []MetaApiPosition) map[string]float64
 				traderScores[traderID] += 3
 			}
 		} else if pos.Profit < -1 {
-			traderScores[traderID] += -2
+			// comment must contain [sl]
+			if strings.Contains(pos.BrokerComment, "[sl]") || strings.Contains(pos.OriginalComment, "[sl]") {
+				traderScores[traderID] += -2
+			}
 		}
 		// minimum score is 18
 		traderLastTradeTime[traderID] = pos.Time

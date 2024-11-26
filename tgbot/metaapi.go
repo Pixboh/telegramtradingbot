@@ -170,7 +170,11 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		if err != nil {
 			return nil, nil, err
 		}
-		if len(positions) > 0 && riskableProfit > 0 {
+		ongoingLossRiskTotal := tgBot.getOngoingLossRiskTotal(positions)
+		if ongoingLossRiskTotal > 0 {
+			riskableProfit = riskableProfit - ongoingLossRiskTotal
+		}
+		if riskableProfit < 0 {
 			// reach daily profit goal
 			log.Printf("Reached daily profit goal")
 			tgBot.sendMessage("❌ Daily profit goal reached", 0)
@@ -1640,25 +1644,8 @@ func (tgBot *TgBot) checkCurrentPositions() {
 
 	// loosing position
 	for _, position := range latestPositions {
-		isLoosing := tgBot.RedisClient.IsLosingPosition(position.ID)
-		if isLoosing && position.Profit > 0 && !position.isBreakeven() {
-			clientId := position.ClientID
-			// check if tp1 is containing
-			messageId := extractMessageIdFromClientId(clientId)
-			messagePositions := getPositionsByMessageId(latestPositions, messageId)
-			// trigger breakeven
-			// send message
-			if len(messagePositions) > 0 {
-				positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
-				// check if breakeven is setted for the channel on redis
-				tgBot.sendMessage("Auto breakeven triggered for deadly position", int(positionMessageId))
-				tgBot.doBreakeven(messagePositions, 1)
-			}
-			continue
-
-		}
 		// Check if position has a valid stop loss set
-		if !isLoosing && position.StopLoss > 0 && !position.isBreakeven() {
+		if position.StopLoss > 0 && !position.isBreakeven() {
 			// Calculate the distance to the stop loss
 			totalDistance := math.Abs(position.OpenPrice - position.StopLoss)
 			currentDistance := math.Abs(position.CurrentPrice - position.OpenPrice)
@@ -1678,6 +1665,16 @@ func (tgBot *TgBot) checkCurrentPositions() {
 				println("Position tagged as deadly: ", position.ID)
 			}
 		}
+	}
+	for _, position := range latestPositions {
+		isLoosing := tgBot.RedisClient.IsLosingPosition(position.ID)
+		if isLoosing && position.Profit > 0 && !position.isBreakeven() {
+			positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+			// check if breakeven is setted for the channel on redis
+			tgBot.sendMessage("Auto breakeven triggered for deadly position", int(positionMessageId))
+			tgBot.doBreakeven([]MetaApiPosition{position}, 1)
+		}
+
 	}
 
 	// longer positions that last more than 12 hours should be closed if they are making profit
