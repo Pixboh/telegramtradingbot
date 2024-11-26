@@ -170,15 +170,17 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		if err != nil {
 			return nil, nil, err
 		}
-		ongoingLossRiskTotal := tgBot.getOngoingLossRiskTotal(positions)
-		if ongoingLossRiskTotal > 0 {
-			riskableProfit = riskableProfit - ongoingLossRiskTotal
-		}
-		if riskableProfit < 0 {
-			// reach daily profit goal
-			log.Printf("Reached daily profit goal")
-			tgBot.sendMessage("❌ Daily profit goal reached", 0)
-			return nil, nil, errors.New("daily profit goal reached")
+		if riskableProfit > 0 {
+			ongoingLossRiskTotal := tgBot.getOngoingLossRiskTotal(positions)
+			if ongoingLossRiskTotal > 0 {
+				riskableProfit = riskableProfit - ongoingLossRiskTotal
+			}
+			if riskableProfit < 0 {
+				// reach daily profit goal
+				log.Printf("Reached daily profit goal")
+				tgBot.sendMessage("❌ Daily profit goal reached", 0)
+				return nil, nil, errors.New("daily profit goal reached")
+			}
 		}
 
 		// check for similar trades ongoing
@@ -1570,13 +1572,14 @@ func (tgBot *TgBot) checkCurrentPositions() {
 				// on going loss
 				totalLossOngoing := tgBot.getOngoingLossRiskTotal(latestPositions)
 				if totalLossOngoing >= 0 {
-					// if loss can be covered wont hurt daily profit goal
-					if currentDayProfit-totalLossOngoing >= defaultProfitGoal {
+					// if loss can be covered wont hurt daily profit goal withinh a little margin
+					if currentDayProfit-totalLossOngoing >= defaultProfitGoal*0.95 {
 						closeAllPositions = false
 					}
 				}
 				if closeAllPositions {
 					tgBot.doCloseTrade(latestPositions)
+					// breakeven to all
 					// confirm by get current positions
 					latestPositions, err := tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
 					if err != nil {

@@ -126,7 +126,7 @@ func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64
 	pipsToStopLoss := calculatePips(entryPrice, stopLoss, request.Symbol)
 	// here we will evaluate the risk management of the trade request
 	maxVolume := tgBot.RedisClient.GetTradingVolume(channelId)
-	if maxRiskableProfit < 5 {
+	if maxRiskableProfit == -1 {
 		// stopLoss distance in pips
 		// dynamic maxVolume calculation
 		dynamicVolume := tgBot.calculateVolumeSizeForTradeRequest(pipsToStopLoss, riskPerTradePercentage, accountBalance)
@@ -134,7 +134,7 @@ func (tgBot *TgBot) GetTradingDynamicVolume(request *TradeRequest, price float64
 			// recorrection of maxVolume
 			maxVolume = dynamicVolume
 		}
-	} else {
+	} else if maxVolume >= 0 {
 		// calculate volume based on maxRiskableProfit
 		dynammcVolume := tgBot.calculateVolumeSizeForTradeRequestByProfit(pipsToStopLoss, accountBalance, maxRiskableProfit)
 		if dynammcVolume <= maxVolume {
