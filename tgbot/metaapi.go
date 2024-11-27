@@ -1255,12 +1255,41 @@ func (p *MetaApiPosition) ToMetaApiPositionLite() MetaApiPositionLite {
 	return out
 }
 
-func (p *MetaApiPosition) isBreakevenSetted() bool {
-	if p.Type == "POSITION_TYPE_BUY" {
-		return p.StopLoss >= p.OpenPrice
+func (position *MetaApiPosition) isBreakevenSetted() bool {
+	if position.StopLoss == 0 {
+		return false
 	}
-	if p.Type == "POSITION_TYPE_SELL" {
-		return p.StopLoss <= p.OpenPrice
+	if position.Type == "POSITION_TYPE_BUY" {
+		// stop loss superior to entry price
+		if position.StopLoss >= position.OpenPrice {
+			return true
+		}
+		//
+		distance := position.OpenPrice - position.StopLoss
+		distance = math.Abs(distance)
+		symbole := position.Symbol
+		pointSize := getCurrencyPointSize(symbole)
+		margin := pointSize * 2
+		distancePoint := distance / pointSize
+		if distancePoint <= margin {
+			return true
+		}
+	} else if position.Type == "POSITION_TYPE_SELL" {
+		// stop loss inferior to entry price
+		if position.StopLoss <= position.OpenPrice {
+			return true
+		}
+		//
+		distance := position.StopLoss - position.OpenPrice
+		distance = math.Abs(distance)
+		symbole := position.Symbol
+		pointSize := getCurrencyPointSize(symbole)
+		margin := pointSize * 2
+		distancePoint := distance / pointSize
+		if distancePoint <= margin {
+			return true
+		}
+
 	}
 	return false
 }
@@ -1650,7 +1679,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		isLoosing := tgBot.RedisClient.IsLosingPosition(position.ID)
 
 		// Check if position has a valid stop loss set
-		if !isLoosing && position.StopLoss > 0 && !position.isBreakeven() {
+		if !isLoosing && position.StopLoss > 0 && !position.isBreakevenSetted() {
 			// Calculate the distance to the stop loss
 			totalDistance := math.Abs(position.OpenPrice - position.StopLoss)
 			currentDistance := math.Abs(position.CurrentPrice - position.OpenPrice)
@@ -1673,7 +1702,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	}
 	for _, position := range latestPositions {
 		isLoosing := tgBot.RedisClient.IsLosingPosition(position.ID)
-		if isLoosing && position.Profit > 0 && !position.isBreakeven() {
+		if isLoosing && position.Profit > 0 && !position.isBreakevenSetted() {
 			positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
 			// check if breakeven is setted for the channel on redis
 			tgBot.sendMessage("Auto breakeven triggered for deadly position", int(positionMessageId))
@@ -1695,7 +1724,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		// check if position is older than 12 hours
 		if timePos.Before(time.Now().Add(-12 * time.Hour)) {
 			// check if position is making profit
-			if position.Profit > 0 && !position.isBreakeven() {
+			if position.Profit > 0 && !position.isBreakevenSetted() {
 				// send message
 				tgBot.doSlToEntryPrice([]MetaApiPosition{position})
 				// send message
