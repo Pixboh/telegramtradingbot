@@ -132,6 +132,13 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 	message := input.Message
 	parentRequest := input.ParentRequest
 	if parentRequest == nil {
+		// if channel score is negative skip
+		channelScore := tgBot.RedisClient.GetChannelScore(strconv.FormatInt(channel.ID, 10))
+		if channelScore < 0 {
+			log.Printf("Channel score is negative")
+			tgBot.sendMessage("❌ Channel score is negative", 0)
+			return nil, nil, errors.New("channel score is negative")
+		}
 
 		tradeRequest, err := tgBot.GptParseNewMessage(input.Message, tgBot.AppConfig.OpenAiToken, symbols)
 		if err != nil {
@@ -233,10 +240,8 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 		balance := tgBot.getAccountBalance()
 		volume := tgBot.GetTradingDynamicVolume(tradeRequest, currentPrice, balance, int(input.ChannelID), riskableProfit)
 		// do not trade if volume inferior to 0.01
-		if volume < 0.01 {
-			log.Printf("Volume less than 0.01")
-			tgBot.sendMessage("❌ Volume less than 0.01", 0)
-			return nil, nil, errors.New("volume less than 0.01")
+		if volume > 0 && volume < 0.01 {
+			volume = 0.01
 		}
 		tradeRequest.Volume = volume
 
@@ -330,16 +335,9 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			// 2 digits
 			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
 			// if volume is less than 0.01 skip trade²
-			if metaApiTradeVolume < 0.01 {
+			if metaApiTradeVolume > 0 && metaApiTradeVolume < 0.01 {
 				// set minimum volume to take non risky trade
-				if i == 1 && tradeRequest.Volume >= 0.01 {
-					// at least take the tp1 fisahbilah
-					metaApiTradeVolume = 0.01
-				} else {
-					log.Printf("Volume less than 0.01")
-					tgBot.sendMessage("❌ Volume less than 0.01", 0)
-					return nil, nil, errors.New("volume less than 0.01")
-				}
+				metaApiTradeVolume = 0.01
 			}
 			metaApiRequest.Volume = &metaApiTradeVolume
 			// concat channel id and channel initial
