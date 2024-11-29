@@ -64,6 +64,10 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 	dispatcher.AddHandler(handlers.NewCommand("get_channels_daily_stats", tgBot.getChannelsDailyStatsCallback))
 	// get channels score and max volume
 	dispatcher.AddHandler(handlers.NewCommand("get_channels_score", tgBot.getChannelsScoresCallback))
+	// close all trade when positive
+	dispatcher.AddHandler(handlers.NewCommand("close_all_trades", tgBot.closeAllTradesCallback))
+	// max allowed hour for trade
+	dispatcher.AddHandler(handlers.NewCommand("set_maxi_hour_for_trade", tgBot.setMaxHourForTradeCallback))
 
 	dispatcher.AddHandler(handlers.NewCallback(nil, tgBot.handleCallback))
 
@@ -152,11 +156,118 @@ func (tgBot *TgBot) LaunchBorisBot(*telegram.Client) {
 			Command:     "get_channels_score",
 			Description: "Get channels Score",
 		},
+		{
+			Command:     "close_all_trades",
+			Description: "Close all trades",
+		},
+		{
+			Command:     "set_maxi_hour_for_trade",
+			Description: "Set max hour for trade",
+		},
 	}, nil)
 
 	// Idle, to keep updates coming in, and avoid bot stopping.
 	updater.Idle()
 	tgBot.sendMessage("Bot launched successfully", 0)
+}
+
+// max hour for trade
+func (tgBot *TgBot) setMaxHourForTradeCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.setMaxHourForTrade(b, ctx, false)
+}
+
+func (tgBot *TgBot) setMaxHourForTrade(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	// Create the inline keyboard buttons
+	// list of volumes
+	maxHours := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24}
+	// generate inlineKeyboard base on volumes
+	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
+	for _, maxHour := range maxHours {
+		// current volule
+		currentMaxHour := tgBot.RedisClient.GetMaxHourForTrade()
+		// limit to 2
+		text := fmt.Sprintf("%d", maxHour)
+		if int(currentMaxHour) == maxHour {
+			text = text + " ✅"
+		}
+		inlineKeyboard = append(inlineKeyboard, []gotgbot.InlineKeyboardButton{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("max_hour_for_trade_%d", maxHour),
+			},
+		})
+	}
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the maximum hour for trade:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the maximum hour for trade:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// close all trades when positive
+func (tgBot *TgBot) closeAllTradesCallback(b *gotgbot.Bot, ctx *ext.Context) error {
+	return tgBot.closeAllTrades(b, ctx, false)
+}
+
+// set a boolean to close all trades when positive to true or false
+func (tgBot *TgBot) closeAllTrades(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
+	closeAllTrades := tgBot.RedisClient.CloseAllTradesWhenPositive()
+	text := "Close all trades when positive"
+	if closeAllTrades {
+		text = text + " ✅"
+	}
+	// Create the inline keyboard buttons
+	inlineKeyboard := [][]gotgbot.InlineKeyboardButton{
+		{
+			{
+				Text:         text,
+				CallbackData: fmt.Sprintf("close_all_trades"),
+			},
+		},
+	}
+	// Create an InlineKeyboardMarkup with the buttons
+	replyMarkup := gotgbot.InlineKeyboardMarkup{
+		InlineKeyboard: inlineKeyboard,
+	}
+	// check if reply or edit
+	if !update {
+		_, err := ctx.EffectiveMessage.Reply(b, fmt.Sprintf("Choose the daily loss limit:"), &gotgbot.SendMessageOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	} else {
+		_, _, err := ctx.EffectiveMessage.EditText(b, fmt.Sprintf("Choose the daily loss limit:"), &gotgbot.EditMessageTextOpts{
+			ParseMode:   "HTML",
+			ReplyMarkup: replyMarkup,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send start message: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (tgBot *TgBot) getChannelsScoresCallback(b *gotgbot.Bot, ctx *ext.Context) error {
@@ -750,6 +861,14 @@ func (tgBot *TgBot) GetBotStatus(b *gotgbot.Bot, ctx *ext.Context) error {
 		text = "Status : OFF (❌)"
 	}
 	text = text + "\n-------------------------"
+	// closing all trades when positive
+	if tgBot.RedisClient.CloseAllTradesWhenPositive() {
+		text = text + "\nClose all trades when positive : ON (✅)"
+	} else {
+		text = text + "\nClose all trades when positive : OFF (❌)"
+	}
+	text = text + "\n-------------------------"
+	//
 	// meta apî account info
 	// name
 	information, err := tgBot.getAccountInformation()
@@ -1118,7 +1237,7 @@ func (tgBot *TgBot) setTradeVolume(b *gotgbot.Bot, ctx *ext.Context, update bool
 func (tgBot *TgBot) setDailyProfitGoal(b *gotgbot.Bot, ctx *ext.Context, update bool) error {
 	// Create the inline keyboard buttons
 	// list of volumes
-	profitGoals := []float64{50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000}
+	profitGoals := []float64{10, 20, 30, 50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000}
 	// generate inlineKeyboard base on volumes
 	var inlineKeyboard [][]gotgbot.InlineKeyboardButton
 	for _, profitGoal := range profitGoals {
@@ -1556,6 +1675,28 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 
 		return tgBot.setChannelAutoTrade(b, ctx, true)
 	}
+	// max trade hours
+	if strings.HasPrefix(data, "max_hour_for_trade_") {
+		maxTradeHoursStr := strings.TrimPrefix(data, "max_hour_for_trade_")
+		maxTradeHours, err := strconv.Atoi(maxTradeHoursStr)
+		if err != nil {
+			return fmt.Errorf("failed to parse max trade hours: %w", err)
+		}
+
+		// Stocker le nombre d'heures de trade max dans Redis
+		tgBot.RedisClient.SetMaxHourForTrade(maxTradeHours)
+
+		// Répondre à l'utilisateur
+		_, err = ctx.CallbackQuery.Answer(b, &gotgbot.AnswerCallbackQueryOpts{
+			Text: "Max trade hours updated successfully!",
+		})
+		if err != nil {
+			return fmt.Errorf("failed to answer callback query: %w", err)
+		}
+
+		// Mettre à jour l'affichage
+		return tgBot.setMaxHourForTrade(b, ctx, true)
+	}
 
 	switch ctx.CallbackQuery.Data {
 	case "start_trading":
@@ -1595,6 +1736,16 @@ func (tgBot *TgBot) handleCallback(b *gotgbot.Bot, ctx *ext.Context) error {
 				tgBot.RedisClient.SetChannelAutoTradeAll(true)
 			}
 			return tgBot.setChannelAutoTrade(b, ctx, true)
+		}
+	case "close_all_trades":
+		{
+			// close all trades
+			if tgBot.RedisClient.CloseAllTradesWhenPositive() {
+				tgBot.RedisClient.SetCloseAllTradesWhenPositive(false)
+			} else {
+				tgBot.RedisClient.SetCloseAllTradesWhenPositive(true)
+			}
+			return tgBot.closeAllTrades(b, ctx, true)
 		}
 
 	default:

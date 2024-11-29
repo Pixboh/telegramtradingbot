@@ -1547,6 +1547,33 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	if err != nil {
 		println("Error getting current user positions: ", err)
 	}
+	// if close all when positive
+	if tgBot.RedisClient.CloseAllTradesWhenPositive() {
+		currentProfitTotal := calculateProfit(latestPositions, false)
+		if currentProfitTotal > 1 {
+			err := tgBot.doCloseTrade(latestPositions)
+			if err != nil {
+				println("Error closing all trades: ", err)
+				// send message
+				tgBot.sendMessage("Error closing all trades "+err.Error(), 0)
+			} else {
+				// confirm
+				latestPositions, err = tgBot.currentUserPositions(tgBot.AppConfig.MetaApiEndpoint, tgBot.AppConfig.MetaApiAccountID, tgBot.AppConfig.MetaApiToken)
+				if err != nil {
+					println("Error getting current user positions: ", err)
+				} else {
+					if len(latestPositions) == 0 {
+						tgBot.sendMessage("All trades closed because profit is positive", 0)
+						tgBot.RedisClient.SetCloseAllTradesWhenPositive(false)
+
+					}
+				}
+			}
+		}
+	} else {
+		tgBot.RedisClient.SetCloseAllTradesWhenPositive(false)
+	}
+
 	// check for tp2 without tp1 and breakeven not setted
 	for _, position := range latestPositions {
 		// is position is winning
@@ -1625,49 +1652,45 @@ func (tgBot *TgBot) checkCurrentPositions() {
 		}
 	}
 
-	// if tp2 and tp3 position is making profit up to 60% take half profit to secure
-	// get all tp2 tp3 positions
+	// if making profit secure
 	for _, position := range latestPositions {
 		// FATAL MA NDEY FOFOU
-		tpNumber := extractTPFromClientId(position.ClientID)
 		// check if position is not already secured
 		if tgBot.RedisClient.IsSecuredPosition(position.ID) {
 			continue
 		}
-		if tpNumber > 1 {
-			positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
-			// check if position is making profit
-			if position.Profit > 0 && position.isBreakevenSetted() {
-				// check if position has take profit and we can split the volume
-				if position.Volume > 0.02 {
-					// if case no take profit setted use a max take profit
-					if position.TakeProfit == 0 {
-						// add 500 pips to the current price
-						pointSize := getCurrencyPointSize(position.Symbol)
-						position.TakeProfit = position.CurrentPrice + (500 * pointSize)
-					}
-					// ensure that we've not already partially closed the position
-					// if already partially closed brokerComment with be like "to #positionId"
-					// distance to take profit
-					distance := position.TakeProfit - position.OpenPrice
-					// check if current price is close to take profit by 60%
-					if position.CurrentPrice >= position.OpenPrice+distance*0.55 {
-						// close half profit
-						err := tgBot.doCloseHalfProfitTrade(position)
-						if err != nil {
+		positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+		// check if position is making profit
+		if position.Profit > 0 && position.isBreakevenSetted() {
+			// check if position has take profit and we can split the volume
+			if position.Volume > 0.02 {
+				// if case no take profit setted use a max take profit
+				if position.TakeProfit == 0 {
+					// add 500 pips to the current price
+					pointSize := getCurrencyPointSize(position.Symbol)
+					position.TakeProfit = position.CurrentPrice + (500 * pointSize)
+				}
+				// ensure that we've not already partially closed the position
+				// if already partially closed brokerComment with be like "to #positionId"
+				// distance to take profit
+				distance := position.TakeProfit - position.OpenPrice
+				// check if current price is close to take profit by 60%
+				if position.CurrentPrice >= position.OpenPrice+distance*0.55 {
+					// close half profit
+					err := tgBot.doCloseHalfProfitTrade(position)
+					if err != nil {
 
-							//log
-							println("Error closing half profit trade: ", err)
-							// send message to user
+						//log
+						println("Error closing half profit trade: ", err)
+						// send message to user
 
-							tgBot.sendMessage("[AUTO] Error closing half profit trade : "+err.Error(), int(positionMessageId))
-							break
-						} else {
-							// send message to user
-							tgBot.sendMessage("[AUTO] Half profit trade closed", int(positionMessageId))
-							// save to secured position
-							tgBot.RedisClient.SaveSecuredPosition(position.ID)
-						}
+						tgBot.sendMessage("[AUTO] Error closing half profit trade : "+err.Error(), int(positionMessageId))
+						break
+					} else {
+						// send message to user
+						tgBot.sendMessage("[AUTO] Half profit trade closed", int(positionMessageId))
+						// save to secured position
+						tgBot.RedisClient.SaveSecuredPosition(position.ID)
 					}
 				}
 			}
@@ -1675,6 +1698,7 @@ func (tgBot *TgBot) checkCurrentPositions() {
 	}
 
 	// loosing position
+	// get ouuut of here
 	for _, position := range latestPositions {
 		isLoosing := tgBot.RedisClient.IsLosingPosition(position.ID)
 
@@ -1709,6 +1733,76 @@ func (tgBot *TgBot) checkCurrentPositions() {
 			tgBot.doBreakeven([]MetaApiPosition{position}, 1)
 		}
 
+	}
+
+	// max time for trade to stay open
+	maxTradeOpenTime := tgBot.RedisClient.GetMaxHourForTrade()
+	// if trade last too long set it to breakeven if positive
+	for _, position := range latestPositions {
+		tpNumber := extractTPFromClientId(position.ClientID)
+		if tpNumber == 1 && isBreakevenSetted(&position) == false {
+			// check if position is older than 12 hours
+			timeString := position.Time
+			timePos, err := time.Parse(time.RFC3339, timeString)
+			if err != nil {
+				println("Error parsing time: ", err)
+			}
+			h := time.Duration(maxTradeOpenTime) * time.Hour
+			if timePos.Before(time.Now().Add(-h)) {
+				// get time difference
+				difference := time.Now().Sub(timePos)
+				// difference minus maxTradehour
+				difference = difference - time.Duration(maxTradeOpenTime)*time.Hour
+				// check if position is making profit
+				if position.Profit > 1 {
+					clientId := position.ClientID
+					// check if tp1 is containing
+					messageId := extractMessageIdFromClientId(clientId)
+					channelID := extractChannelIDFromClientId(clientId)
+					// trigger tp1_hit and breakeven
+					messagePositions := getPositionsByMessageId(latestPositions, messageId)
+					// trigger breakeven
+					// send message
+					if len(messagePositions) > 0 {
+						positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+						// check if breakeven is setted for the channel on redis
+						if tgBot.RedisClient.IsBreakevenEnabled(channelID) {
+							tgBot.sendMessage("Auto breakeven triggered", int(positionMessageId))
+							tgBot.doBreakeven(messagePositions, 1)
+
+						}
+					}
+				} else if position.Profit < 0 {
+					// leave with low loss base on tpNumber and timeframe
+					// if tp1 we can leave with 0.5% loss every extra 15 minutes
+					maxLoss := position.CalculateMaxLoss()
+					if maxLoss > 0 {
+						// count passed timeframes every 15 minutes
+						// 15 minutes
+						count := int(difference.Minutes() / 15)
+						// if count is superior to 1
+						if count > 1 {
+							currentLoss := position.Profit
+							// add 0.05 acceptedLossPercentage every 15 minutes
+							acceptedLossPercentage := 0.0025 * float64(count)
+							// limit to 1% acceptedLossPercentage
+							if acceptedLossPercentage > 0.03 {
+								acceptedLossPercentage = 0.03
+							}
+							// check if current loss is superior to acceptedLossPercentage
+							if math.Abs(currentLoss) <= maxLoss*acceptedLossPercentage {
+								// send message
+								positionMessageId := tgBot.RedisClient.GetPositionMessageId(position.ID)
+								tgBot.sendMessage("Position closed after "+strconv.Itoa(count*15)+" minutes", int(positionMessageId))
+								tgBot.doCloseTrade([]MetaApiPosition{position})
+							}
+						}
+
+					}
+				}
+			}
+
+		}
 	}
 
 	// longer positions that last more than 12 hours should be closed if they are making profit
@@ -2219,6 +2313,46 @@ func (position *MetaApiPosition) isBreakeven() bool {
 		return true
 	}
 	return false
+}
+
+func (p *MetaApiPosition) GetMaxProfit() float64 {
+	// get tp
+	tp := p.TakeProfit
+	if tp == 0 {
+		return 0
+	}
+	// get entry price
+	entryPrice := p.OpenPrice
+	// get symbol
+	symbol := p.Symbol
+	// get point size
+	pointSize := getCurrencyPointSize(symbol)
+	// get distance
+	distance := tp - entryPrice
+	// get distance in point
+	distancePoint := distance / pointSize
+	// get margin
+	// get max profit
+	maxProfit := distancePoint * pointSize * p.Volume
+	return math.Abs(maxProfit)
+}
+
+func (p *MetaApiPosition) CalculateMaxLoss() float64 {
+	// get sl
+	sl := p.StopLoss
+	if sl == 0 {
+		return 0
+	}
+	// get entry price
+	entryPrice := p.OpenPrice
+	// get symbol
+	symbol := p.Symbol
+	// get point size
+	// get distance
+	distancePips := calculatePips(sl, entryPrice, symbol)
+	// get max loss
+	maxLoss := distancePips * p.Volume
+	return math.Abs(maxLoss)
 }
 
 type MetaApiAccountInformation struct {

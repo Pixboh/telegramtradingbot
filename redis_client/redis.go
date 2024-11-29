@@ -741,3 +741,38 @@ func (rdClient *RedisClient) IsLosingPosition(id string) bool {
 
 	return isMember
 }
+
+func (rdClient *RedisClient) CloseAllTradesWhenPositive() bool {
+	// Get the value of the "close_all_trades_when_positive" key
+	closeAllTradesWhenPositive := rdClient.Rdb.Get(ctx, "close_all_trades_when_positive")
+	if closeAllTradesWhenPositive.Err() != nil {
+		return false
+	}
+
+	// Convert the value to a boolean
+	closeAllTradesWhenPositiveBool, _ := strconv.ParseBool(closeAllTradesWhenPositive.Val())
+	return closeAllTradesWhenPositiveBool
+}
+
+func (rdClient *RedisClient) SetCloseAllTradesWhenPositive(closeAllTradesWhenPositive bool) {
+	// Set the "close_all_trades_when_positive" key to the specified value
+	rdClient.Rdb.Set(ctx, "close_all_trades_when_positive", closeAllTradesWhenPositive, 0)
+}
+
+func (rdClient *RedisClient) GetMaxHourForTrade() int64 {
+	// Get the value of the "max_hour_for_trade" key
+	maxHourForTrade := rdClient.Rdb.Get(ctx, "max_hour_for_trade")
+	if maxHourForTrade.Err() != nil {
+		return 24
+	}
+
+	// Convert the value to an integer
+	maxHourForTradeInt, _ := strconv.ParseInt(maxHourForTrade.Val(), 10, 64)
+	return maxHourForTradeInt
+
+}
+
+func (rdClient *RedisClient) SetMaxHourForTrade(maxHourForTrade int) {
+	// Set the "max_hour_for_trade" key to the specified value
+	rdClient.Rdb.Set(ctx, "max_hour_for_trade", maxHourForTrade, 0)
+}
