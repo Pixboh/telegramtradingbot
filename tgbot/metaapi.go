@@ -333,12 +333,13 @@ func (tgBot *TgBot) HandleTradeRequest(input HandleRequestInput) (*TradeRequest,
 			}
 			tpNumber := i + 1
 			// 2 digits
-			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
 			// if volume is less than 0.01 skip trade²
-			if metaApiTradeVolume > 0 && metaApiTradeVolume < 0.01 {
+			if metaApiTradeVolume <= 0.01 {
 				// set minimum volume to take non risky trade
 				metaApiTradeVolume = 0.01
 			}
+			metaApiTradeVolume = math.Floor(metaApiTradeVolume*100) / 100
+
 			metaApiRequest.Volume = &metaApiTradeVolume
 			// concat channel id and channel initial
 			chanelInitials := GenerateInitials(channel.Title) + "@" + strconv.Itoa(int(channel.ID))
